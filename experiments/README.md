@@ -1,5 +1,5 @@
 # Current Experiments 
-
+- `exp-001`: train gpt-2's tokenizer and finetune gpt-2's embedding layers `wte` and `wpe` on HF's OSCAR `unshuffled_deduplicated_fr`. 
 
 # Carbon Tracking 
 Do not forget to log your experiments [in this spreadsheet](https://docs.google.com/spreadsheets/d/1Mk8mYCOF_WxMv-Uv5ThkFs5Ak5B9s9EnRUh1CpykEJ0/edit#gid=0)

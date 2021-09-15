@@ -12,11 +12,11 @@
 #SBATCH --mem=150g
 
 # Specify a job name:
-#SBATCH -J exp-001-run_clm
+#SBATCH -J exp-001-run_clm_no_tok
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/001/run_clm.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/001/run_clm.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/001/run_clm_no_tok.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/001/run_clm_no_tok.err
 
 # Set up the environment by loading modules
 set -a # automatically export all variables
@@ -28,11 +28,10 @@ source $FP_BIGS/env_lang_mod/bin/activate
 
 tokenizer_dir="${FP_BIGS}/data/processed/exp-001/oscar-fr-tokenizer"
 cache_dir="${FP_BIGS}/data/external/oscar_fr"
-output_dir="${FP_BIGS}/data/processed/exp-001/ft-gpt2"
+output_dir="${FP_BIGS}/data/processed/exp-001/ft-gpt2-no-tok"
 
 python $FP_BIGS/scripts/exp-001/run_clm.py \
     --model_name_or_path gpt2 \
-    --tokenizer_name $tokenizer_dir \
     --dataset_name oscar \
     --cache_dir $cache_dir \
     --dataset_config_name unshuffled_deduplicated_fr \

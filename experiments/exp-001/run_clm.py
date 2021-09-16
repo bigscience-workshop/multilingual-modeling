@@ -473,6 +473,19 @@ def main():
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
 
+    import gc
+    del tokenized_datasets
+    gc.collect()
+    
+    # original training_args.per_device_train_batch_size = 8
+    training_args.per_device_train_batch_size = 4
+    training_args.gradient_accumulation_steps = 2
+
+    # original training_args.per_device_eval_batch_size = 8
+    training_args.per_device_eval_batch_size = 4
+    training_args.eval_accumulation_steps = 2
+
+
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
@@ -491,6 +504,7 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
+        print("checkpoint:", checkpoint)
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
 

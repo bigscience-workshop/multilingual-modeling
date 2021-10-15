@@ -25,10 +25,31 @@ assert args.do_train ^ args.do_predict  # current code doesnt allow do_train fol
 
 from datasets import load_dataset
 
-xnli_dataset = load_dataset("flue", "XNLI", cache_dir="/users/zyong2/data/zyong2/bigscience/data/external/flue")
-xnli_train_dataset = xnli_dataset['train']
-xnli_val_dataset = xnli_dataset['validation']
-xnli_test_dataset = xnli_dataset['test']
+cls_train_datasetdict = load_dataset("/users/zyong2/data/zyong2/bigscience/notebooks/nb-002/flue", 
+                                     "CLS", 
+                                     split=f"train", 
+                                     cache_dir="/users/zyong2/data/zyong2/bigscience/data/external/flue-cls").train_test_split(train_size=0.8, shuffle=True, seed=42)
+cls_train_dataset = cls_train_datasetdict['train']
+cls_val_dataset = cls_train_datasetdict['test']
+cls_test_dataset = load_dataset("/users/zyong2/data/zyong2/bigscience/notebooks/nb-002/flue", 
+                                "CLS", 
+                                split="test",
+                                cache_dir="/users/zyong2/data/zyong2/bigscience/data/external/flue-cls") # "PAWS-X", "XNLI", "CLS", "WSD-V"
+
+print("Before splitting:")
+print(cls_train_dataset)
+print(cls_val_dataset)
+print(cls_test_dataset)
+
+# split: dvd
+cls_train_dataset = cls_train_dataset.filter(lambda x:x['category']=="dvd")
+cls_val_dataset = cls_val_dataset.filter(lambda x:x['category']=="dvd")
+cls_test_dataset = cls_test_dataset.filter(lambda x:x['category']=="dvd")
+
+print("After splitting:")
+print(cls_train_dataset)
+print(cls_val_dataset)
+print(cls_test_dataset)
 
 import torch
 import numpy as np
@@ -38,15 +59,15 @@ from transformers import GPT2Tokenizer, GPT2ForSequenceClassification
 tokenizer = GPT2Tokenizer.from_pretrained(args.tokenizer)
 
 def tokenize_function(examples):
-    return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypo"]}', padding="max_length", truncation=True)
+    return tokenizer(examples["text"], padding="max_length", truncation=True)
 
 tokenizer.pad_token = tokenizer.eos_token  # tokenizer.encode(tokenizer.eos_token) = [0]
-full_train_dataset = xnli_train_dataset.map(tokenize_function, batched=False)
-full_val_dataset = xnli_val_dataset.map(tokenize_function, batched=False)
-full_test_dataset = xnli_test_dataset.map(tokenize_function, batched=False)
-small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(100))
-small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(100))
-small_test_dataset = full_test_dataset.shuffle(seed=42).select(range(100))
+full_train_dataset = cls_train_dataset.map(tokenize_function, batched=True)
+full_val_dataset = cls_val_dataset.map(tokenize_function, batched=True)
+full_test_dataset = cls_test_dataset.map(tokenize_function, batched=True)
+small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(10))
+small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(10))
+
 
 from datasets import load_metric
 
@@ -76,10 +97,11 @@ training_args = TrainingArguments(
 )
 
 model = GPT2ForSequenceClassification.from_pretrained(args.pretrained_model, 
-                                                      num_labels=3, 
-                                                      pad_token_id=0)
-
+                                                    num_labels=2, 
+                                                    pad_token_id=0)
 if args.do_train:
+    logging.info("Start Training")
+
     trainer = Trainer(
         model=model, 
         args=training_args, 
@@ -91,13 +113,13 @@ if args.do_train:
     trainer.train()
 
 if args.do_predict:
+    logging.info("Start Evaluation")
+
     trainer = Trainer(
         model=model, 
-        args=training_args, 
+        args=training_args,
         eval_dataset=full_test_dataset, 
         compute_metrics=compute_metrics
     )
 
     print("Evaluate:", trainer.evaluate())
-
-

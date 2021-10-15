@@ -26,12 +26,13 @@ set +a
 module load python/3.7.4
 source $FP_BIGS/env_lang_mod/bin/activate
 
-learning_rates=( 1e-5 5e-5 1e-6 5e-6 )
-# learning_rates=( 1e-5 )
+# learning_rates=( 1e-5 5e-5 1e-6 5e-6 )
+learning_rates=( 5e-6 )
 for lr in ${learning_rates[@]} ; do
     echo "LR ===== $lr"
     OUTPUT_DIR="$FP_BIGS/data/processed/exp-002/flue-paws-gpt2-tok/$lr"
     MODEL_NAME="$FP_BIGS/data/processed/exp-001/ft-gpt2-2/checkpoint-110500"
+    TOKENIZER_NAME="$FP_BIGS/data/processed/exp-001/oscar-fr-tokenizer"
     mkdir -p $OUTPUT_DIR
     
     python $FP_BIGS/scripts/exp-002/eval_flue_paws.py $OUTPUT_DIR \
@@ -39,5 +40,7 @@ for lr in ${learning_rates[@]} ; do
     --learning_rate $lr \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 4 \
-    --pretrained_model $MODEL_NAME
+    --pretrained_model $MODEL_NAME \
+    --tokenizer $TOKENIZER_NAME \
+    --do_train
 done 

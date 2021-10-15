@@ -1,13 +1,13 @@
 import logging
 # setup logging
 logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(name)s ======   %(message)s',
+    format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     level=logging.INFO,
 )
 logging.getLogger().addHandler(logging.StreamHandler())
 
-
+from datasets import load_dataset
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("output_dir")
@@ -25,37 +25,28 @@ assert args.do_train ^ args.do_predict  # current code doesnt allow do_train fol
 
 from datasets import load_dataset
 
-xnli_dataset = load_dataset("flue", "XNLI", cache_dir="/users/zyong2/data/zyong2/bigscience/data/external/flue")
-xnli_train_dataset = xnli_dataset['train']
-xnli_val_dataset = xnli_dataset['validation']
-xnli_test_dataset = xnli_dataset['test']
+paws_dataset = load_dataset("paws-x", 'en', cache_dir=f"/users/zyong2/data/zyong2/bigscience/data/external/paws-x")
+paws_train_dataset = paws_dataset['train']
+paws_val_dataset = paws_dataset['validation']
+paws_test_dataset = paws_dataset['test']
 
 import torch
-import numpy as np
-from transformers import TrainingArguments, Trainer
 from transformers import GPT2Tokenizer, GPT2ForSequenceClassification
 
 tokenizer = GPT2Tokenizer.from_pretrained(args.tokenizer)
 
 def tokenize_function(examples):
-    return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypo"]}', padding="max_length", truncation=True)
+    return tokenizer(f'{examples["sentence1"]} {tokenizer.eos_token} {examples["sentence2"]}', padding="max_length", truncation=True)
 
 tokenizer.pad_token = tokenizer.eos_token  # tokenizer.encode(tokenizer.eos_token) = [0]
-full_train_dataset = xnli_train_dataset.map(tokenize_function, batched=False)
-full_val_dataset = xnli_val_dataset.map(tokenize_function, batched=False)
-full_test_dataset = xnli_test_dataset.map(tokenize_function, batched=False)
+full_train_dataset = paws_train_dataset.map(tokenize_function, batched=False)
+full_val_dataset = paws_val_dataset.map(tokenize_function, batched=False)
+full_test_dataset = paws_test_dataset.map(tokenize_function, batched=False)
 small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(100))
 small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(100))
 small_test_dataset = full_test_dataset.shuffle(seed=42).select(range(100))
 
-from datasets import load_metric
-
-metric = load_metric("accuracy")
-
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-    return metric.compute(predictions=predictions, references=labels)
+from transformers import TrainingArguments
 
 training_args = TrainingArguments(
     args.output_dir,
@@ -75,8 +66,19 @@ training_args = TrainingArguments(
     load_best_model_at_end=True,
 )
 
+from transformers import Trainer
+from datasets import load_metric
+import numpy as np
+
+metric = load_metric("accuracy")
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    return metric.compute(predictions=predictions, references=labels)
+
 model = GPT2ForSequenceClassification.from_pretrained(args.pretrained_model, 
-                                                      num_labels=3, 
+                                                      num_labels=2, 
                                                       pad_token_id=0)
 
 if args.do_train:
@@ -94,6 +96,7 @@ if args.do_predict:
     trainer = Trainer(
         model=model, 
         args=training_args, 
+        train_dataset=full_train_dataset, 
         eval_dataset=full_test_dataset, 
         compute_metrics=compute_metrics
     )

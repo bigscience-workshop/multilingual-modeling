@@ -12,11 +12,11 @@
 #SBATCH --mem=50g
 
 # Specify a job name:
-#SBATCH -J exp-031-download_oscar_fr
+#SBATCH -J exp-031-download_oscar_ko
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/001/download_oscar_fr.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/001/download_oscar_fr.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/001/download_oscar_ko.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/001/download_oscar_ko.err
 
 # Set up the environment by loading modules
 # Set up the environment by loading modules
@@ -27,4 +27,4 @@ set +a
 module load python/3.7.4
 source $FP_BIGS/env_lang_mod/bin/activate
 
-python3 $FP_BIGS/scripts/exp-001/download_oscar_fr.py
+python3 $FP_BIGS/scripts/exp-001/download_oscar_ko.py

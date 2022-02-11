@@ -145,7 +145,8 @@ def get_hidden_states_for_talks(dataset, model, talks, mname):
     hidden_state_size = model.config.num_hidden_layers
     fname = f"{args.output_dir}/ted_multi-{mname.replace('/','-')}-ted_multi-{len(talks)}.pt"
     if os.path.isfile(fname):
-        return load_from_file(fname)
+        emb = load_from_file(fname)
+        return emb
     for sid, sample in enumerate(dataset):
         if sample['talk_name'] in talks:
             tsample = sample['translations']
@@ -159,7 +160,7 @@ def get_hidden_states_for_talks(dataset, model, talks, mname):
                             emb[lng][state] = []
                     out = model(x)
                     for state in range(hidden_state_size):
-                        hs = torch.mean(out.hidden_states[state][0][1:-1], dim=0).detach()
+                        hs = torch.mean(out.hidden_states[state][0], dim=0).detach()
                         emb[lng][state].append(Sample(sid, hs))
     torch.save(emb, fname)
     return emb

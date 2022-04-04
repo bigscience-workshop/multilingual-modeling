@@ -9,7 +9,7 @@ from collections import namedtuple
 import torch
 import numpy as np
 from transformers import TrainingArguments, Trainer, AdapterTrainer
-from transformers import AutoTokenizer, GPT2Tokenizer, GPT2ForSequenceClassification, AutoModelForCausalLM, GPT2Config
+from transformers import AutoTokenizer, GPT2Tokenizer, GPT2ForSequenceClassification, AutoModelForCausalLM
 
 # setup logging
 import sys
@@ -29,17 +29,15 @@ parser.add_argument("--per_device_train_batch_size", type=int, default=4)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
 parser.add_argument("--pretrained_model") 
 parser.add_argument("--original_model")  
+parser.add_argument("--wte")
+parser.add_argument("--wpe")  
 parser.add_argument("--tokenizer")
+parser.add_argument("--madx_lang_adapter")
 parser.add_argument("--do_train", default=False, action="store_true")
 parser.add_argument("--do_eval_after_train", default=False, action="store_true")
 parser.add_argument("--do_predict", default=False, action="store_true")
 parser.add_argument("--use_partial_data", default=False, action="store_true")
 parser.add_argument("--zero_shot", default=False, action="store_true")
-
-finetune_strategies = ["whole", "lang_adapters", "task_adapters"]
-parser.add_argument("--madx_lang_adapter", required=True)
-parser.add_argument("--adapter_lang_name", required=True)
-parser.add_argument("--finetune_strategies", choices=finetune_strategies, required=True)
 
 args = parser.parse_args()
 if args.do_eval_after_train:
@@ -100,9 +98,6 @@ small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(100))
 small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(100))
 small_test_dataset = full_test_dataset.shuffle(seed=42).select(range(100))
 
-logger.info(full_train_dataset[0])
-logger.info(full_train_dataset[100])
-
 from datasets import load_metric
 metric = load_metric("xnli")
 
@@ -110,7 +105,6 @@ def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
     return metric.compute(predictions=predictions, references=labels)
-
 
 training_args = TrainingArguments(
     args.output_dir,
@@ -132,66 +126,52 @@ training_args = TrainingArguments(
 )
 
 def load_model(args, inference=False):
-
-    # FIXME: if we load with GPT2ForSequenceClassification, the embeddings are the original one 
-    # even when we call load_adapter
-    print(args)
-
+    # for adapters, when we load with GPT2ForSequenceClassification, the embeddings are the original model
     if args.zero_shot and not inference:
         model = GPT2ForSequenceClassification.from_pretrained(args.pretrained_model, 
-                                                          num_labels=3,
-                                                          pad_token_id=en_tokenizer.pad_token_id, 
-                                                          cache_dir=args.cache_dir)
-        
-        original_config = GPT2Config.from_pretrained(args.original_model)
-        original_model = GPT2ForSequenceClassification.from_pretrained(args.original_model, num_labels=3)
-
-        # replace the embedding layer with original (contains-en) embedding.
-        logger.info("👉 Replace with en-langauge embedding")
-        model.resize_token_embeddings(original_config.vocab_size)
-        
-        model._modules['transformer']._modules['wte'] = original_model._modules['transformer']._modules['wte']
-        model._modules['transformer']._modules['wpe'] = original_model._modules['transformer']._modules['wpe']
-        logger.info(f"👉 Embedding (wte) changes to {model._modules['transformer']._modules['wte']}")
-        logger.info(f"👉 Embedding (wte) changes to {model._modules['transformer']._modules['wpe']}")
+                                                            num_labels=3,
+                                                            pad_token_id=en_tokenizer.pad_token_id,
+                                                            cache_dir=args.cache_dir)
     else:
         model = GPT2ForSequenceClassification.from_pretrained(args.pretrained_model, 
-                                                          num_labels=3,
-                                                          pad_token_id=tokenizer.pad_token_id, 
-                                                          cache_dir=args.cache_dir)
+                                                            num_labels=3,
+                                                            pad_token_id=tokenizer.pad_token_id,
+                                                            cache_dir=args.cache_dir)
+
+    # this part is to replace the embedding layer
+    if not args.zero_shot or (args.zero_shot and inference):
+        if args.wpe:
+            wpe = torch.load(args.wpe)
+            model._modules['transformer']._modules['wpe'].weight.data = wpe
+            logger.info(f"Loaded wpe from {args.wpe}")
+        if args.wte:
+            wte = torch.load(args.wte)
+            model._modules['transformer']._modules['wte'].weight.data = wte
+            logger.info(f"Loaded wte from {args.wte}")
 
     if not inference:
-        adapter_name = model.load_adapter(args.madx_lang_adapter,
-                                        config="pfeiffer+inv",
-                                        load_as=args.adapter_lang_name)
-        if args.finetune_strategies == "whole":
-            model.set_active_adapters(adapter_name)
-        elif args.finetune_strategies == "lang_adapters":
-            model.train_adapter([args.adapter_lang_name])
-        elif args.finetune_strategies == "task_adapters":
-            model.add_adapter("xnli-task-adapter")
-            model.train_adapter("xnli-task-adapter")
-        else:
-            raise ValueError("Lack configuration")
+        if not args.zero_shot and args.madx_lang_adapter:
+            adapter_name = model.load_adapter(args.madx_lang_adapter,
+                                              config="pfeiffer+inv")
+        model.add_adapter("xnli-task-adapter")
+        model.train_adapter("xnli-task-adapter")
         
         print("🔥 ==================== Training: ==================== 🔥")
+        print(model)
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 print(f"🥶 Frozen layer '{name}'")
             else:
                 print(f"🚀 Trainable layer '{name}'")
-        print(model)
     else:
         print("🔥 ==================== Inference: ==================== 🔥")
-        assert args.pretrained_adapters_dir
-        if args.finetune_strategies == "lang_adapters":
-            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.adapter_lang_name}")
+        assert args.pretrained_adapters_dir 
+        if args.madx_lang_adapter:
+            adapter_name = model.load_adapter(args.madx_lang_adapter)
             model.set_active_adapters(adapter_name)
-        elif args.finetune_strategies == "task_adapters":
-            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.adapter_lang_name}")
-            model.set_active_adapters(adapter_name)
-            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xnli-task-adapter")
-            model.set_active_adapters(adapter_name)
+
+        adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xnli-task-adapter")
+        model.set_active_adapters(adapter_name)
         print(model)
 
     return model
@@ -210,14 +190,13 @@ if args.do_train:
     trainer.train()
 
 if args.do_predict:
-    if args.do_eval_after_train:
-        evaluation_dirs = list(sorted([
-                    checkpoint_dir
-                    for checkpoint_dir in os.listdir(args.output_dir)
-                    if checkpoint_dir.startswith('checkpoint-')
-                ], key=lambda x: int(x[len('checkpoint-'):])))
-        args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
-        logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
+    evaluation_dirs = list(sorted([
+                checkpoint_dir
+                for checkpoint_dir in os.listdir(args.output_dir)
+                if checkpoint_dir.startswith('checkpoint-')
+            ], key=lambda x: int(x[len('checkpoint-'):])))
+    args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
+    logger.info(f"[Evaluation] Loading trained task adapters from {args.pretrained_adapters_dir}")
 
     model = load_model(args, inference=True)
     training_args.report_to = list()
@@ -229,4 +208,6 @@ if args.do_predict:
         compute_metrics=compute_metrics
     )
 
-    print("Evaluate on Test:", trainer.evaluate())
+    result = trainer.evaluate()
+
+    print("Evaluate on Test:", result)

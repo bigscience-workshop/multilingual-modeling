@@ -36,3 +36,7 @@ $OUTPUT_DIR \
 ```
 
 Remove `--zero_shot` for supervised finetuning setting.
+
+### Zero-shot Prompt-based Setting
+
+See branch [`bigscience-lm-adapt`](https://github.com/yongzx/lm-evaluation-harness/tree/bigscience-lm-adapt) of yongzx/lm-evaluation-harness (forked repo).

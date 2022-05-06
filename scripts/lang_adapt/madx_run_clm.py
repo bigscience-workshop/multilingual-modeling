@@ -600,7 +600,9 @@ def main():
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
-        trainer.model.save_embeddings(f'{trainer.args.output_dir}/embedding_layer')
+        # save embedding and positional embedding (which is not saved by trainer)
+        trainer.model.save_embeddings(trainer.args.output_dir, 'lng_emb')
+        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/positional_embedding.pt')
 
         metrics = train_result.metrics
 

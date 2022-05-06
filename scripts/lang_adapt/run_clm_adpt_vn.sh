@@ -28,7 +28,7 @@ lng=$2
 adapter_reduction_factor=$3
 dataset=oscar
 adapter_config="pfeiffer+inv"
-vocabsize=24000
+vocabsize=1000
 model_name="tr5b-1B3-multilingual-alpha-checkpoints/ch${ch}"
 tokenizer_dir="${FP_BIGS}/tokenizers/${lng}_oscar_${data_sample}_tokenizer_${vocabsize}" #default tok settings with vocab size = 24k
 cache_dir="${FP_BIGS}/data/"
@@ -70,9 +70,9 @@ python $FP_BIGS/multilingual-modeling/scripts/lang_adapt/madx_run_clm.py \
     --evaluation_strategy "epoch" \
     --max_eval_samples 5000 \
     --save_steps 10000 \
-    --save_strategy "steps" \
-    --save_total_limit 3 \ 
-    --max_train_samples $data_sample \
+    --save_strategy "epoch" \
+    --save_total_limit 3 \
+    --max_train_samples ${data_sample}\
     --max_steps 50000 \
     --train_adapter \
     --load_best_model_at_end \
@@ -80,4 +80,4 @@ python $FP_BIGS/multilingual-modeling/scripts/lang_adapt/madx_run_clm.py \
     --embedding_strategies "overlap-replace" \
     --adapter_reduction_factor $adapter_reduction_factor \
     --adapter_config ${adapter_config} \
-    --language $lng
+    --language $lng &> $output_dir/train.log

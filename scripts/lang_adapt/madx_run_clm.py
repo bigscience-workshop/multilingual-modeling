@@ -437,7 +437,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                     config=adapter_config,
                     load_as=task_name,
                 )
-            # otherwise, add a fresh adapter
             else:
                 model.add_adapter(task_name, config=adapter_config)
         # optionally load a pre-trained language adapter
@@ -484,6 +483,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     frozen_params = 0
     emb_params = 0
     for name, param in model.named_parameters():
+        if "wte" in name or "wpe" in name:
+            param.requires_grad = True
+            emb_params += param.numel()
+
         if not param.requires_grad:
             print(f"🥶 Frozen layer '{name}'")
             frozen_params += param.numel()
@@ -583,7 +586,8 @@ def main():
         data_collator=default_data_collator
     )
 
-    logger.info(model)
+    print("Model: 👇")
+    print(model)
 
     # Training
     if training_args.do_train:

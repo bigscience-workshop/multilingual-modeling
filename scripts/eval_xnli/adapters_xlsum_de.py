@@ -15,7 +15,6 @@ from transformers import AutoTokenizer, GPT2Tokenizer, GPT2LMHeadModel, AutoMode
 logger.remove()
 logger.add(sys.stderr, format="{level} {level.icon} | [{time}] - {message}")
 
-
 # parser
 parser = argparse.ArgumentParser()
 parser.add_argument("output_dir")

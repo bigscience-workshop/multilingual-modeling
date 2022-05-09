@@ -28,6 +28,7 @@ parser.add_argument("--num_train_epochs", type=int, default=30)
 parser.add_argument("--learning_rate", type=float, default=1e-5)
 parser.add_argument("--per_device_train_batch_size", type=int, default=4)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
+parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
 parser.add_argument("--pretrained_model") 
 parser.add_argument("--original_model")  
 parser.add_argument("--tokenizer")
@@ -68,16 +69,16 @@ logger.info("Loading dataset...")
 
 # will need to rename splits if the dataset has different name for validation set
 if args.zero_shot:
-    print("Cross Lingual")
+    print("0️⃣ Cross Lingual")
     # cross lingual: use english as train and validation set
-    en_dataset = load_dataset(args.dataset, "english", cache_dir=args.cache_dir)
+    en_dataset = load_dataset(args.dataset, "english" if args.dataset == "xlsum" else "en", cache_dir=args.cache_dir)
     dataset = load_dataset(args.dataset, args.lang, cache_dir=args.cache_dir)
 
     train_dataset = en_dataset["train"]
     val_dataset = en_dataset["validation"]
     test_dataset = dataset["test"]
 else:
-    print("Supervised training")
+    print("👀 Supervised training")
     dataset = load_dataset(args.dataset, args.lang, cache_dir=args.cache_dir)
 
     train_dataset = dataset["train"]
@@ -90,21 +91,29 @@ logger.info("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision)
 tokenizer.pad_token = tokenizer.eos_token
 
-def tokenize_function(example):
-    inputs = tokenizer(f'summarize this article: {example["text"]}', max_length=256, padding="max_length", truncation=True)
+if args.dataset == "xnli":
+    def tokenize_function(examples):
+        return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
 
-    with tokenizer.as_target_tokenizer():
-        summaries = tokenizer(f'{example["summary"]}', max_length=256, padding="max_length", truncation=True)
-    
-    inputs["labels"] = summaries["input_ids"]
+elif args.dataset == "xlsum":
+    def tokenize_function(example):
+        inputs = tokenizer(f'summarize this article: {example["text"]}', max_length=256, padding="max_length", truncation=True)
 
-    return inputs
+        with tokenizer.as_target_tokenizer():
+            summaries = tokenizer(f'{example["summary"]}', max_length=256, padding="max_length", truncation=True)
+        
+        inputs["labels"] = summaries["input_ids"]
+
+        return inputs
 
 if args.zero_shot:
     en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision)
     en_tokenizer.pad_token = en_tokenizer.eos_token
     
     if args.dataset == "xnli":
+        def en_tokenize_function(examples):
+            return en_tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
+
     elif args.dataset == "xlsum":
         def en_tokenize_function(example):
             inputs = en_tokenizer(f'summarize this article: {example["text"]}', max_length=256, padding="max_length", truncation=True)
@@ -164,6 +173,7 @@ training_args = TrainingArguments(
     eval_steps=500 if not args.use_partial_data else None,
     num_train_epochs=args.num_train_epochs,
     per_device_train_batch_size=args.per_device_train_batch_size,
+    per_device_eval_batch_size=args.per_device_eval_batch_size,
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     learning_rate=args.learning_rate,
     evaluation_strategy="epoch",
@@ -181,12 +191,14 @@ def load_model(args, inference=False):
 
     # Hack for loading wte module not needed here, since using a causal language model class
     if args.zero_shot and not inference:
-        model = model_class_mapping[args.task].from_pretrained(args.pretrained_model, 
+        model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model, 
+                                                            num_labels=3 if args.dataset == "xnli" else None,
                                                             pad_token_id=en_tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
                                                             revision=args.revision)
     else:
-        model = model_class_mapping[args.task].from_pretrained(args.pretrained_model,
+        model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model,
+                                                            num_labels=3 if args.dataset == "xnli" else None,
                                                             pad_token_id=tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
                                                             revision=args.revision)
@@ -216,8 +228,8 @@ def load_model(args, inference=False):
         elif args.finetune_strategies == "lang_adapters":
             model.train_adapter([args.adapter_lang_name])
         elif args.finetune_strategies == "task_adapters":
-            model.add_adapter("xlsum-task-adapter")
-            model.train_adapter("xlsum-task-adapter")
+            model.add_adapter(f"{args.dataset}-task-adapter")
+            model.train_adapter(f"{args.dataset}-task-adapter")
         else:
             raise ValueError("invalid configuration")
         
@@ -239,10 +251,10 @@ def load_model(args, inference=False):
                 assert args.pretrained_adapters_dir 
                 adapter_name = model.load_adapter(args.madx_lang_adapter)
                 model.set_active_adapters(adapter_name)
-                adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xlsum-task-adapter")
+                adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset}-task-adapter")
                 model.set_active_adapters(adapter_name)
             else:
-                adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xlsum-task-adapter") #TODO: change the argument to this
+                adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset}-task-adapter") #TODO: change the argument to this
                 model.set_active_adapters(adapter_name)
         # print(model)
 
@@ -266,7 +278,7 @@ if args.do_train:
 
 
 if args.do_predict:
-    if arg.do_eval_after_train:
+    if args.do_eval_after_train:
         evaluation_dirs = list(sorted([
             checkpoint_dir 
             for checkpoint_dir in os.listdir(args.output_dir) 
@@ -275,9 +287,9 @@ if args.do_predict:
         assert len(evaluation_dirs) > 0
         logger.info(f"Found {len(evaluation_dirs)} checkpoints")
 
-        if args.madx_lang_adapter:
-                args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
-                logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
+    # load the last checkpoint. TODO: make sure this still should be done even if no madx adapter is used  
+    args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
+    logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
         
     model = load_model(args, inference=True)
     training_args.report_to = list()

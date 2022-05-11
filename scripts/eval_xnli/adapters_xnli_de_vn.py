@@ -144,7 +144,7 @@ def load_model(args, inference=False):
                                                           pad_token_id=en_tokenizer.pad_token_id,
                                                           cache_dir=args.cache_dir)
 
-    if not args.cross_lingual:
+    if inference or not args.cross_lingual:
         causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
         causal_lm_model.resize_token_embeddings(len(tokenizer))
         if not args.original_model == args.pretrained_model:

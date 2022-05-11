@@ -135,7 +135,7 @@ training_args = TrainingArguments(
 def load_model(args, inference=False):
     # FIXME: if we load with GPT2ForSequenceClassification, the embeddings are the original one 
     # even when we call load_adapter
-    if not args.original_model == args.pretrained_model:
+    if not args.original_model == args.pretrained_model and not args.zero_shot:
         wte = torch.load(f'{args.pretrained_model}/embedding.pt')
         wpe = torch.load(f'{args.pretrained_model}/positional_embedding.pt')        
         

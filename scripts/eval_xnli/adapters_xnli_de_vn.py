@@ -34,7 +34,7 @@ parser.add_argument("--do_train", default=False, action="store_true")
 parser.add_argument("--do_eval_after_train", default=False, action="store_true")
 parser.add_argument("--do_predict", default=False, action="store_true")
 parser.add_argument("--use_partial_data", default=False, action="store_true")
-parser.add_argument("--zero_shot", default=False, action="store_true")
+parser.add_argument("--cross_lingual", default=False, action="store_true")
 
 finetune_strategies = ["whole", "lang_adapters", "task_adapters"]
 parser.add_argument("--madx_lang_adapter")
@@ -54,7 +54,7 @@ print(args)
 
 
 # load dataset
-if args.zero_shot:
+if args.cross_lingual:
     print("0️⃣ 0-Shot")
     # 0-shot: use english as train and validation
     xnli_en_dataset = load_dataset("xnli", "en", cache_dir=args.cache_dir)
@@ -75,7 +75,7 @@ else:
 # load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir)
 tokenizer.pad_token = tokenizer.eos_token  # tokenizer.encode(tokenizer.eos_token) = [0]
-if args.zero_shot:
+if args.cross_lingual:
     en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir) # has to use AutoTokenizer instead of GPT2Tokenizer
     en_tokenizer.pad_token = en_tokenizer.eos_token
 
@@ -88,7 +88,7 @@ def en_tokenize_function(examples):
 
 logger.info("Tokenizing the dataset...")
 if args.do_train:
-    if args.zero_shot:
+    if args.cross_lingual:
         full_train_dataset = train_dataset.map(en_tokenize_function, batched=False)
         full_val_dataset = val_dataset.map(en_tokenize_function, batched=False)
     else:
@@ -144,7 +144,7 @@ def load_model(args, inference=False):
                                                           pad_token_id=en_tokenizer.pad_token_id,
                                                           cache_dir=args.cache_dir)
 
-    if not args.zero_shot:
+    if inference or not args.cross_lingual:
         causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
         causal_lm_model.resize_token_embeddings(len(tokenizer))
         if not args.original_model == args.pretrained_model:
@@ -156,7 +156,7 @@ def load_model(args, inference=False):
             model.set_active_adapters(adapter_name)
 
     if not inference:
-        #if not args.zero_shot: normally need to add adapter in any case
+        #if not args.cross_lingual: normally need to add adapter in any case
             # normally this is already done, why use adapter_lang_name here?
             #if args.madx_lang_adapter:
             #    adapter_name = model.load_adapter(args.madx_lang_adapter,

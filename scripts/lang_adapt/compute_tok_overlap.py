@@ -39,8 +39,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--lang', type=str, required=True)
     parser.add_argument('--tokenizers', type=str,  nargs='+',
-                    help='an integer for the accumulator')
-    parser.add_argument('--plot_name', type=str, default="stats_plot")
+                    help='list of the tokenizers for which you want to get statstics')
+    parser.add_argument('--plot_name', type=str, default=None, help="If set generate plots containing tokens distribution across different axes (frequency, length, etc)")
     args = parser.parse_args()
     lng = args.lang
     tokenizers = args.tokenizers
@@ -76,18 +76,18 @@ if __name__ == "__main__":
         print(f"Overlap between new tokenizer vocab and obtained tokenswith original tokenizer vocab : {len(baseline_overlap)} ")
 
 
-
-    print("Do plotting")
-    fig, ax = plt.subplots(1, 4, figsize=(40, 10))
-    ax[0].set_title("Token occ distribution")
-    plot_histogram([[math.log(v) for v in tok_occs[t].values()] for t in tokenizers], tokenizers, ax[0], 10)
-    ax[1].set_title("Seq length distribution")    
-    plot_histogram([seq_lengths[t] for t in tokenizers], tokenizers, ax[1], 10)
-    ax[2].set_title("Diff wtih en seq length distribution")    
-    plot_histogram([seq_lengths[t]/seq_lengths["en"] for t in tokenizers], tokenizers, ax[2], 10)
-    ax[3].set_title("Tok length distribution")
-    plot_histogram([[len(v) for v in vocabs[t] for i in range(tok_occs[t][v])] for t in tokenizers], tokenizers, ax[3], 10)
-    ax[1].legend()
-    fig.savefig(f"{args.plot_name}.png")    
+    if args.plot_name:
+        print("Do plotting")
+        fig, ax = plt.subplots(1, 4, figsize=(40, 10))
+        ax[0].set_title("Token occ distribution")
+        plot_histogram([[math.log(v) for v in tok_occs[t].values()] for t in tokenizers], tokenizers, ax[0], 10)
+        ax[1].set_title("Seq length distribution")    
+        plot_histogram([seq_lengths[t] for t in tokenizers], tokenizers, ax[1], 10)
+        ax[2].set_title("Diff wtih en seq length distribution")    
+        plot_histogram([seq_lengths[t]/seq_lengths["en"] for t in tokenizers], tokenizers, ax[2], 10)
+        ax[3].set_title("Tok length distribution")
+        plot_histogram([[len(v) for v in vocabs[t] for i in range(tok_occs[t][v])] for t in tokenizers], tokenizers, ax[3], 10)
+        ax[1].legend()
+        fig.savefig(f"{args.plot_name}.png")    
 
 

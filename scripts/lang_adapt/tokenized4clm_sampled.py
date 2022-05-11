@@ -75,8 +75,8 @@ if args.extend_vocab:
     print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_extend")
 elif args.replace_with_overlap:
     # This setting is not really working properly: we need to save the new_tokenizer, but add somehow <unk> token that can be used at inference which I don't know how to do (so that it is also get used at tokenization step properly 
-    tokenizer = AutoTokenizer.from_pretrained('/tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/exp-009/tr5b-1B3-multilingual-alpha-checkpoints/')
-    
+    tokenizer = AutoTokenizer.from_pretrained('/tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/exp-009/tr5b-1B3-multilingual-alpha-checkpoints/', unk_token="<unk>")
+
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
     print("✅ Trained tokenizer with len ", len(new_tokenizer))

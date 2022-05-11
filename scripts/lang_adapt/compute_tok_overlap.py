@@ -73,7 +73,8 @@ if __name__ == "__main__":
         print(f'Tokenizer {t}, avg ratio with En tokenized sentence length: {np.mean(x)}+/- {np.std(x)}') 
         baseline_overlap = vocabs[t].intersection(set(en_tok.vocab.keys()))
         print(f"Overlap with original tokenizer vocab : {len(baseline_overlap)} ")
-        print(f"Overlap between new tokenizer vocab and obtained tokenswith original tokenizer vocab : {len(baseline_overlap)} ")
+        overlap_vocab_toks = vocabs[t].intersection(set(tok_occs[t].keys()))
+        print(f"Which portion of new tokenizer was used? : {len(overlap_vocab_toks)}, represents {1.0*len(overlap_vocab_toks}/len(vocabs[t])}% of learnt vocab ")
 
 
     if args.plot_name:

@@ -190,18 +190,22 @@ training_args = TrainingArguments(
 def load_model(args, inference=False):
 
     # Hack for loading wte module not needed here, since using a causal language model class
+    optional_kwargs = {}
+    if args.dataset == "xnli":
+        optional_kwargs = {"num_labels": 3}
     if args.zero_shot and not inference:
+        # only pass in num_labels if using a seq. classification model
         model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model, 
-                                                            num_labels=3 if args.dataset == "xnli" else None,
                                                             pad_token_id=en_tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
-                                                            revision=args.revision)
+                                                            revision=args.revision,
+                                                            **optional_kwargs)
     else:
         model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model,
-                                                            num_labels=3 if args.dataset == "xnli" else None,
                                                             pad_token_id=tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
-                                                            revision=args.revision)
+                                                            revision=args.revision,
+                                                            **optional_kwargs)
     if not args.zero_shot or (args.zero_shot and inference):
         # if not zero shot, that means that we need to replace the embedding layers during training
         # we also need to replace embedding layers during inference
@@ -287,7 +291,7 @@ if args.do_predict:
         assert len(evaluation_dirs) > 0
         logger.info(f"Found {len(evaluation_dirs)} checkpoints")
 
-    # load the last checkpoint. TODO: make sure this still should be done even if no madx adapter is used  
+    # load the last checkpoint. 
     args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
     logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
         

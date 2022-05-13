@@ -8,8 +8,10 @@ from datasets import load_metric
 
 import torch
 import numpy as np
-from transformers import TrainingArguments, AdapterTrainer
+import nltk
+from transformers import TrainingArguments, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
 from transformers import AutoTokenizer, GPT2LMHeadModel, GPT2ForSequenceClassification, AutoModelForCausalLM
+from transformers import DataCollatorForSeq2Seq
 
 
 logger.remove()
@@ -47,12 +49,24 @@ parser.add_argument("--finetune_strategies", choices=finetune_strategies, requir
 
 parser.add_argument("--deepspeed", required=False)
 
-# mapping of task to model_class
+# mapping of tasks to model/trainer classes
 model_class_mapping = {"xnli": GPT2ForSequenceClassification, "xlsum": GPT2LMHeadModel}
+trainer_class_mapping = {"xnli": AdapterTrainer, "xlsum": Seq2SeqAdapterTrainer}
+trainer_args_mapping = {"xnli": TrainingArguments, "xlsum": Seq2SeqTrainingArguments}
+
 
 args = parser.parse_args()
 if args.do_eval_after_train:
     args.do_predict = True
+
+# additional args to pass to the model init. task-dependent
+optional_model_kwargs = {}
+optional_trainer_args = {}
+if args.dataset == "xnli":
+    optional_model_kwargs = {"num_labels": 3}
+elif args.dataset == "xlsum":
+    optional_trainer_args = {"generation_max_length": 128, "predict_with_generate":True}
+
 
 if args.local_rank:
     torch.cuda.set_device(args.local_rank)
@@ -97,10 +111,10 @@ if args.dataset == "xnli":
 
 elif args.dataset == "xlsum":
     def tokenize_function(example):
-        inputs = tokenizer(f'summarize this article: {example["text"]}', max_length=256, padding="max_length", truncation=True)
+        inputs = tokenizer(f'summarize this article: {example["text"]}', max_length=96, padding="max_length", truncation=True)
 
         with tokenizer.as_target_tokenizer():
-            summaries = tokenizer(f'{example["summary"]}', max_length=256, padding="max_length", truncation=True)
+            summaries = tokenizer(f'{example["summary"]}', max_length=96, padding="max_length", truncation=True)
         
         inputs["labels"] = summaries["input_ids"]
 
@@ -116,10 +130,10 @@ if args.zero_shot:
 
     elif args.dataset == "xlsum":
         def en_tokenize_function(example):
-            inputs = en_tokenizer(f'summarize this article: {example["text"]}', max_length=256, padding="max_length", truncation=True)
+            inputs = en_tokenizer(f'summarize this article: {example["text"]}', max_length=96, padding="max_length", truncation=True)
 
             with en_tokenizer.as_target_tokenizer():
-                summaries = en_tokenizer(f'{example["summary"]}', max_length=256, padding="max_length", truncation=True)
+                summaries = en_tokenizer(f'{example["summary"]}', max_length=96, padding="max_length", truncation=True)
             
             inputs["labels"] = summaries["input_ids"]
 
@@ -158,14 +172,25 @@ elif args.dataset == "xlsum":
 
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
+        
+        preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+        labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        return metric(preds, labels)
+        preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in preds]
+        labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
+        
+        result = metric.compute(predictions=preds, references=labels)
+        # TODO: need to confirm these are the right rouge values to report. Can report more ROUGE metrics if needed.
+        result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
+        
+        return {k: round(v, 4) for k, v in result.items()}
 
 else:
     raise ValueError("Unknown dataset provided")
 
 
-training_args = TrainingArguments(
+training_args = trainer_args_mapping[args.dataset](
     output_dir=args.output_dir,
     overwrite_output_dir=True,
     do_train=True,
@@ -184,28 +209,26 @@ training_args = TrainingArguments(
     logging_dir=f"{args.output_dir}/logs",
     load_best_model_at_end=True,
     deepspeed=args.deepspeed,
+    **optional_trainer_args,
 )
 
 # TODO: double-check the adapter loading logic here
 def load_model(args, inference=False):
 
     # Hack for loading wte module not needed here, since using a causal language model class
-    optional_kwargs = {}
-    if args.dataset == "xnli":
-        optional_kwargs = {"num_labels": 3}
     if args.zero_shot and not inference:
         # only pass in num_labels if using a seq. classification model
         model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model, 
                                                             pad_token_id=en_tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
                                                             revision=args.revision,
-                                                            **optional_kwargs)
+                                                            **optional_model_kwargs)
     else:
         model = model_class_mapping[args.dataset].from_pretrained(args.pretrained_model,
                                                             pad_token_id=tokenizer.pad_token_id,
                                                             cache_dir=args.cache_dir,
                                                             revision=args.revision,
-                                                            **optional_kwargs)
+                                                            **optional_model_kwargs)
     if not args.zero_shot or (args.zero_shot and inference):
         # if not zero shot, that means that we need to replace the embedding layers during training
         # we also need to replace embedding layers during inference
@@ -269,12 +292,25 @@ def load_model(args, inference=False):
 if args.do_train:
     logger.info("Starting training...")
     model = load_model(args)
-    trainer = AdapterTrainer(
+
+    
+    # only use seq2seq collator if doing seq2seq task
+    if args.dataset == "xlsum":
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=-100,
+        )
+    
+
+    trainer = trainer_class_mapping[args.dataset](
         model=model,
         args=training_args,
         train_dataset=small_train_dataset if args.use_partial_data else full_train_dataset,
         eval_dataset=small_val_dataset if args.use_partial_data else full_val_dataset,
         compute_metrics=compute_metrics,
+        # args for xlsum only
+        **{"data_collator": data_collator} if args.dataset == "xlsum" else {},
     )
 
     trainer.train()
@@ -298,11 +334,22 @@ if args.do_predict:
     model = load_model(args, inference=True)
     training_args.report_to = list()
 
-    trainer = AdapterTrainer(
+    if args.dataset == "xlsum":
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=-100,
+            pad_to_multiple_of=8 if training_args.fp16 else None,
+        )
+    
+    trainer = trainer_class_mapping[args.dataset](
         model=model,
         args=training_args,
         eval_dataset=small_test_dataset if args.use_partial_data else full_test_dataset,
         compute_metrics=compute_metrics,
+        # args for xlsum only
+        **{"data_collator": data_collator} if args.dataset == "xlsum" else {}
+
     )
 
     print("Evaluating on test set...", trainer.evaluate())

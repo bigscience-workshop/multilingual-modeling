@@ -30,12 +30,15 @@ $OUTPUT_DIR \
 --do_train \
 --do_eval_after_train \
 --madx_lang_adapter $MADX_LANG_ADAPTER_NAME \
---adapter_lang_name "xnli-de" \
 --finetune_strategies $FT_STRATEGIES \
 --zero_shot
 ```
 
 Remove `--zero_shot` for supervised finetuning setting.
+
+Notes:
+- `adapters_xnli_de_vn.py` is Vassilina's forked of `adapters_xnli_de.py`.
+- `train_xnli_zero_shot.sh` is the batch script for XNLI training, and `run_eval_xnli_zero_shot.sh` is for evaluating trained XNLI task adapters.
 
 ### Zero-shot Prompt-based Setting
 

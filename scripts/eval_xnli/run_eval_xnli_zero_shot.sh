@@ -30,7 +30,7 @@ data_dir="${FP_BIGS}/exp-ext-${LANG}/madx-bs1b3-multi-ch${ch}-${LANG}-sample${da
 data_tok_dir=${data_dir}/lng_tok
 
 MODEL_DIR="${data_dir}/bs1.3B${ch}-${adapter_config}-${adapter_reduction_factor}-es5"
-XNLI_ZH_DIR=$ORIGINAL_MODEL/xnli_task_adapter_full
+XNLI_ZH_DIR=$ORIGINAL_MODEL/xnli_task_adapter_full  # output directory
 LR=1e-5
 
 # language adapters checkpoint folder

@@ -16,8 +16,6 @@ import datasets
 from datasets import load_dataset
 
 import transformers
-from transformers import EarlyStoppingCallback
-
 import transformers.adapters.composition as ac
 from transformers import (
     CONFIG_MAPPING,
@@ -101,14 +99,6 @@ class ModelArguments:
             "with private models)."
         },
     )
-    lang_adapt_strategies: str = field(
-        default="",
-        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
-    )
-    embedding_strategies: str = field(
-        default="",
-        metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
-    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
@@ -122,9 +112,7 @@ class DataTrainingArguments:
     """
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
-    data_lang: Optional[str] = field(
-        default=None, metadata={"help": "The language of the dataset"}
-    )
+
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
@@ -244,11 +232,12 @@ def load_data(data_args, model_args):
 
     if "validation" not in raw_datasets.keys():
         if data_args.max_eval_samples is not None and data_args.max_train_samples is not None:                
-            raw_datasets = raw_datasets['train'].train_test_split(train_size = data_args.max_train_samples*2, test_size = data_args.max_eval_samples*2)
+            raw_datasets = raw_datasets['train'].train_test_split(train_size = data_args.max_train_samples, test_size = data_args.max_eval_samples)
         elif data_args.max_eval_samples is not None :                
-            raw_datasets = raw_datasets['train'].train_test_split(test_size = data_args.max_eval_samples*2)
+            raw_datasets = raw_datasets['train'].train_test_split(test_size = data_args.max_eval_samples)
         else:
             raw_datasets = raw_datasets['train'].train_test_split(test_size = data.args.validation_split_percentage/100.0)
+
         raw_datasets['validation'] = raw_datasets['test']
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -258,13 +247,6 @@ def load_data(data_args, model_args):
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    if data_args.max_train_samples is not None and len(raw_datasets['train']) > data_args.max_train_samples:
-        # FIXME: currently assume the loaded checkpoint is trained with the first data_args.max_train_samples number of samples
-        #raw_datasets["train"] = raw_datasets["train"].filter(lambda example, indice: indice < data_args.max_train_samples, with_indices=True)
-        raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
-
-    if data_args.max_eval_samples is not None and len(raw_datasets['validation']) > data_args.max_eval_samples:
-        raw_datasets["validation"] = raw_datasets["validation"].select(range(data_args.max_eval_samples))
 
     return raw_datasets
 
@@ -299,20 +281,24 @@ def load_model(model_args, tokenizer):
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
     #TODO: remap embedding parameters
-
+    #if not tokenizer.name_or_path == model_args.model_name_or_path:
+    #    orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    
+    model.resize_token_embeddings(len(tokenizer))
     return model
 
 def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
-        saved_tokenized_datasets_fp = pathlib.Path(f"{training_args.data_dir}/tokenized_data.pt")
+        saved_tokenized_datasets_fp = pathlib.Path(f"{training_args.data_dir}/tokenized_datasets.pt")
+        if not tokenizer.name_or_path == model_args.model_name_or_path:
+            saved_tokenized_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lngemb_tokenized_datasets.pt")
+            
+        saved_tokenized_datasets_fp.parent.mkdir(parents=True, exist_ok=True)
         if saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
-            logger.info(f"✅ loaded tokenized_data")
+            logger.info("Sanity check: loaded tokenized_datasets")
         else:
             raw_datasets = load_data(data_args, model_args)
-            assert len(raw_datasets['train']) == data_args.max_train_samples
-            logger.info(f"🧠 Sanity check: loaded raw datasets have {data_args.max_train_samples} samples")
-                                                      
             # First we tokenize all the texts.
             if training_args.do_train:
                 column_names = raw_datasets["train"].column_names
@@ -324,6 +310,7 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
             tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
 
             def tokenize_function(examples):
+    
                 with CaptureLogger(tok_logger) as cl:
                     output = tokenizer(examples[text_column_name])
                     # clm input could be much much longer than block_size
@@ -332,7 +319,6 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
                             "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
                         )
                     return output
-
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
@@ -341,10 +327,8 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
-                                                      
             torch.save(tokenized_datasets, saved_tokenized_datasets_fp)
-            logger.info(f"✅ saved tokenized_data")
-
+            logger.info("Sanity check: saved tokenized_datasets")
         if "train" not in tokenized_datasets and training_args.do_train:
             raise ValueError("--do_train requires a train dataset")
         if "validation" not in tokenized_datasets and training_args.do_eval:
@@ -393,11 +377,14 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
     with training_args.main_process_first(desc="grouping texts together"):
-        saved_lm_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lm_data.pt")
+        saved_lm_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lm_datasets.pt")
+        if not tokenizer.name_or_path == model_args.model_name_or_path:
+            saved_lm_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lngemb_lm_datasets.pt")
         if saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
-            logger.info("✅ loaded lm_data")
+            logger.info("Sanity check: loaded lm_datasets")
         else:
+
             tokenized_datasets = preprocess_data(training_args, data_args, model_args, tokenizer)
             lm_datasets = tokenized_datasets.map(
                 group_texts,
@@ -407,17 +394,10 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
                 desc=f"Grouping texts in chunks of {block_size}",
             )
             torch.save(lm_datasets, saved_lm_datasets_fp)
-            logger.info("✅ saved lm_data")
+            logger.info("Sanity check: saved lm_datasets")
     return lm_datasets
 
-def modify_model(adapter_args, data_args, model_args, tokenizer, model):
-    #if "emb" in model_args.lang_adapt_strategies:
-    #    if "replace" in model_args.embedding_strategies:
-    #        for name, param in model.named_parameters():
-    #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
-    #                param.requires_grad = False
-
-
+def add_adapters(adapter_args, data_args, model):
     # Setup adapters
     if adapter_args.train_adapter:
         task_name = data_args.dataset_name or "clm"
@@ -429,6 +409,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 adapter_args.adapter_config,
                 non_linearity=adapter_args.adapter_non_linearity,
                 reduction_factor=adapter_args.adapter_reduction_factor,
+                leave_out = [i for i in range(0,23)]
             )
             # load a pre-trained from Hub if specified
             if adapter_args.load_adapter:
@@ -457,45 +438,35 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         else:
             lang_adapter_name = None
         # Freeze all model weights except of those of this adapter
-        model.train_adapter(task_name, train_embeddings=True)
+        model.train_adapter([task_name])
         # Set the adapters to be used in every forward pass
-        #if lang_adapter_name:
-        #    model.set_active_adapters(ac.Stack(lang_adapter_name, task_name))
-        #else:
-        #    model.set_active_adapters(task_name)
-
+        if lang_adapter_name:
+            model.set_active_adapters(ac.Stack(lang_adapter_name, task_name))
+        else:
+            model.set_active_adapters(task_name)
     else:
         if adapter_args.load_adapter or adapter_args.load_lang_adapter:
             raise ValueError(
                 "Adapters can only be loaded in adapters training mode."
                 "Use --train_adapter to enable adapter training"
             )
-
-    if model_args.embedding_strategies == "overlap-replace":
-        if not tokenizer.name_or_path == model_args.model_name_or_path:
-            orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
-        model._active_embedding = "lng_emb"
-        model.delete_embeddings('default')
-        model.tie_weights()
-    elif model_args.embedding_strategies == "replace":
-        model.resize_token_embeddings(len(tokenizer))
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
     for name, param in model.named_parameters():
         if not param.requires_grad:
-            print(f"🥶 Frozen layer '{name}'")
-            frozen_params += param.numel()
+            if not "wte" in name and not "lm_head" in name:
+                print(f"🥶 Frozen layer '{name}'")
+                frozen_params +=param.numel()
+            else:
+                param.requires_grad = True
+                print(f"🚀 Trainable layer '{name}'")
+                emb_params += param.numel()
         else:
             print(f"🚀 Trainable layer '{name}'")
             trainable_params += param.numel()
-         
-        if "wte" and "wpe" in name:
-            emb_params += param.numel()
-
     print(f"Total frozen parameters: {frozen_params}")
-    print(f"Total emb parameters (wte, wpe): {emb_params}")
+    print(f"Total emb parameters: {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
 
 def main():
@@ -513,11 +484,7 @@ def main():
         )
     else:
         model_args, data_args, training_args, adapter_args = parser.parse_args_into_dataclasses()
-        training_args.data_dir = f'{training_args.output_dir}'
-
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt')
-    assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
-
+        training_args.data_dir = f'{training_args.output_dir}/../'
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -563,14 +530,18 @@ def main():
 
     tokenizer = load_tokenizer(model_args)
     model = load_model(model_args, tokenizer)
-    modify_model(adapter_args, data_args, model_args, tokenizer, model)
+
+    add_adapters(adapter_args, data_args, model)
     # Preprocessing the datasets.
     lm_datasets = get_lm_dataset(training_args, data_args, model_args, tokenizer)
     if training_args.do_train:
         train_dataset = lm_datasets["train"]
 
     if training_args.do_eval:
+
         eval_dataset = lm_datasets["validation"]
+
+
     # Initialize our Trainer
     trainer_class = AdapterTrainer if adapter_args.train_adapter else Trainer
     trainer = trainer_class(
@@ -580,7 +551,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=default_data_collator
+        data_collator=default_data_collator,
     )
 
     logger.info(model)
@@ -592,13 +563,8 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        trainer.add_callback(EarlyStoppingCallback(3))
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
-
-        # save embedding and positional embedding (which is not saved by trainer)
-        trainer.model.save_embeddings(trainer.args.output_dir, 'lng_emb')
-        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/positional_embedding.pt')
+        trainer.save_model()  # Saves the tokenizer too for easy upload
 
         metrics = train_result.metrics
 

@@ -27,7 +27,7 @@ parser.add_argument("--num_train_epochs", type=int, default=30)
 parser.add_argument("--learning_rate", type=float, default=1e-5)
 parser.add_argument("--per_device_train_batch_size", type=int, default=4)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
-parser.add_argument("--pretrained_model") 
+parser.add_argument("--adapted_model") 
 parser.add_argument("--original_model")  
 parser.add_argument("--tokenizer")
 parser.add_argument("--do_train", default=False, action="store_true")
@@ -46,8 +46,8 @@ if args.do_eval_after_train:
     args.do_predict = True
 
 if args.original_model is None:
-    # here: because the wpe is not saved, pretrained_model is the original bigsciece model
-    args.original_model = args.pretrained_model
+    # here: because the wpe is not saved, adapted_model is the original bigsciece model
+    args.original_model = args.adapted_model
 
 print("Arguments: ========")
 print(args)
@@ -135,9 +135,9 @@ training_args = TrainingArguments(
 def load_model(args, inference=False):
     # FIXME: if we load with GPT2ForSequenceClassification, the embeddings are the original one 
     # even when we call load_adapter
-    if not args.original_model == args.pretrained_model and not args.cross_lingual:
-        wte = torch.load(f'{args.pretrained_model}/embedding.pt')
-        wpe = torch.load(f'{args.pretrained_model}/positional_embedding.pt')        
+    if not args.original_model == args.adapted_model and not args.cross_lingual:
+        wte = torch.load(f'{args.adapted_model}/embedding.pt')
+        wpe = torch.load(f'{args.adapted_model}/positional_embedding.pt')        
         
     model = GPT2ForSequenceClassification.from_pretrained(args.original_model, 
                                                           num_labels=3,
@@ -148,7 +148,7 @@ def load_model(args, inference=False):
         # need to load embedding/adapters from the model adapted to the new language
         causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
         causal_lm_model.resize_token_embeddings(len(tokenizer))
-        if not args.original_model == args.pretrained_model:
+        if not args.original_model == args.adapted_model:
             causal_lm_model.transformer.wte = wte
             causal_lm_model.transformer.wpe = wpe
         if args.madx_lang_adapter:

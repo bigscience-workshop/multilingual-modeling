@@ -26,11 +26,12 @@ tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_ut
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lang', type=str, required=True)
+parser.add_argument('--model', type=str, required=True)
 parser.add_argument('--tokenizer_dir', type=str, required=True)
 parser.add_argument('--hf_cache_dir', default="~/.cache/huggingface/transformers", type=str)
 parser.add_argument('--vocab_size', default=130_000, type=int)
 parser.add_argument('--extend_vocab', action='store_true')
-parser.add_argument('--replace_with_overlap', action='store_true') # this is not working as expected
+# parser.add_argument('--replace_with_overlap', action='store_true')
 parser.add_argument('--sample_size', default=None, type=int)
 
 args = parser.parse_args()
@@ -73,20 +74,22 @@ if args.extend_vocab:
     print(f"Overlap with previous vocab: {args.vocab_size - added}")
     tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_extend")
     print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_extend")
-elif args.replace_with_overlap:
-    # This setting is not really working properly: we need to save the new_tokenizer, but add somehow <unk> token that can be used at inference which I don't know how to do (so that it is also get used at tokenization step properly 
-    tokenizer = AutoTokenizer.from_pretrained('/tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/exp-009/tr5b-1B3-multilingual-alpha-checkpoints/', unk_token="<unk>")
 
-    assert tokenizer.is_fast
-    new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
-    print("✅ Trained tokenizer with len ", len(new_tokenizer))
-    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_overlap")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_overlap")
+# elif args.replace_with_overlap:
+#     # 
+#     tokenizer = AutoTokenizer.from_pretrained('/tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/exp-009/tr5b-1B3-multilingual-alpha-checkpoints/', unk_token="<unk>")
+
+#     assert tokenizer.is_fast
+#     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
+#     print("✅ Trained tokenizer with len ", len(new_tokenizer))
+#     new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_overlap")
+#     print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_overlap")
+
 else:
-    tokenizer = AutoTokenizer.from_pretrained('gpt2')
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
     print("Unique toks, ", len(unique_toks))
     print("✅ Trained tokenizer with len ", len(new_tokenizer))
-    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_scratch")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_scratch")
+    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_replace")
+    print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_replace")

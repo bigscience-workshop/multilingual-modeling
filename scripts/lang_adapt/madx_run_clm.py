@@ -487,12 +487,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         model.delete_embeddings('default')
         model.tie_weights()
     elif model_args.embedding_strategies == "replace":
-        # print(model.transformer.wte.weight)
-        # print(model.transformer.wpe.weight)
         model.resize_token_embeddings(len(tokenizer))
-        model.transformer.wte.apply(model._init_weights)  # reinitialize token embedding weights
-        # print(model.transformer.wte.weight)
-        # print(model.transformer.wpe.weight)
 
     trainable_params = 0
     frozen_params = 0

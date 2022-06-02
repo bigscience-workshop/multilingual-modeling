@@ -27,23 +27,22 @@ set +a
 
 module load python/3.7.4
 module load gitlfs/2.7.1
-source $FP_BIGS/env_lang_adapter/bin/activate
+source $FP_BIGS/env_try_lang_adapter/bin/activate
 
 
 # axis
 LANG="my"
 DATA_SAMPLES=$(($SLURM_ARRAY_TASK_ID * 1000))
-DATA_SAMPLES=100
 VOCAB_SIZE=5000
 CH=118500
-BIGS_MODEL="/users/zyong2/data/zyong2/huggingface/bigscience/tr5b-1B3-ckpt${CH}"
+BIGS_MODEL="bigscience/bloom-1b3"
 ADPT_STRATEGY="emb"
 EMBD_SRATEGY="replace"
 
-tokenizer_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/${LANG}_oscar_100000_tokenizer_${VOCAB_SIZE}_${EMBD_SRATEGY}"
+tokenizer_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_${BIGS_MODEL##*/}_${LANG}_oscar_${DATA_SAMPLES}samples_${VOCAB_SIZE}vocab_${EMBD_SRATEGY}"
 cache_dir="/users/zyong2/data/zyong2/huggingface/"
-output_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/${LANG}_emb_${DATA_SAMPLES}samples"
-logging_dir="/users/zyong2/data/zyong2/bigscience/reports/020/${LANG}_emb_${DATA_SAMPLES}samples"
+output_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/${BIGS_MODEL##*/}_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples"
+logging_dir="/users/zyong2/data/zyong2/bigscience/reports/020/${BIGS_MODEL##*/}_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples"
 
 mkdir -p $output_dir
 mkdir -p $logging_dir
@@ -77,4 +76,5 @@ python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lan
     --max_steps 50000 \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \
-    --load_best_model_at_end
+    --load_best_model_at_end \
+    --use_auth_token

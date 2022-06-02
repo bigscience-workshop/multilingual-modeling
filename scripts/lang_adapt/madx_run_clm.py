@@ -312,14 +312,19 @@ def load_model(model_args, tokenizer):
 
 def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
-        saved_tokenized_datasets_fp = pathlib.Path(f"{training_args.data_dir}/tokenized_data.pt")
+        # cache tokenized data
+        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+
         if saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
-            logger.info(f"✅ loaded tokenized_data")
+            logger.info(f"✅ loaded tokenized_data from {saved_tokenized_datasets_fp}")
         else:
             raw_datasets = load_data(data_args, model_args)
             assert len(raw_datasets['train']) == data_args.max_train_samples
-            print(f"✅ Sanity check: loaded raw datasets have {data_args.max_train_samples} samples")
+            assert len(raw_datasets['validation']) == data_args.max_eval_samples
+            assert len(raw_datasets['test']) == data_args.max_eval_samples
+            print(f"✅ Sanity check: loaded raw datasets have {data_args.max_train_samples} training samples and {data_args.max_eval_samples} eval samples")
                                                       
             # First we tokenize all the texts.
             if training_args.do_train:
@@ -340,7 +345,7 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
                             "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
                         )
                     return output
-
+            
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
@@ -351,12 +356,13 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
             )
                                                       
             torch.save(tokenized_datasets, saved_tokenized_datasets_fp)
-            logger.info(f"✅ saved tokenized_data")
+            logger.info(f"✅ saved tokenized_data to {saved_tokenized_datasets_fp}")
 
         if "train" not in tokenized_datasets and training_args.do_train:
             raise ValueError("--do_train requires a train dataset")
         if "validation" not in tokenized_datasets and training_args.do_eval:
             raise ValueError("--do_eval requires a validation dataset")
+
         return tokenized_datasets
 
 
@@ -401,10 +407,12 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
     with training_args.main_process_first(desc="grouping texts together"):
-        saved_lm_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lm_data.pt")
+        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+
         if saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
-            logger.info("✅ loaded lm_data")
+            logger.info(f"✅ loaded lm_data from {saved_lm_datasets_fp}")
         else:
             tokenized_datasets = preprocess_data(training_args, data_args, model_args, tokenizer)
             lm_datasets = tokenized_datasets.map(
@@ -415,7 +423,7 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
                 desc=f"Grouping texts in chunks of {block_size}",
             )
             torch.save(lm_datasets, saved_lm_datasets_fp)
-            logger.info("✅ saved lm_data")
+            logger.info(f"✅ saved lm_data to {saved_lm_datasets_fp}")
     return lm_datasets
 
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
@@ -493,7 +501,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     frozen_params = 0
     emb_params = 0
     for name, param in model.named_parameters():
-        if "wte" in name or "wpe" in name:
+        if "word_embeddings" in name:
             param.requires_grad = True
             emb_params += param.numel()
         elif model_args.lang_adapt_strategies == "emb":
@@ -616,10 +624,16 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
         # save embedding and positional embedding (which is not saved by trainer)
-        embedding_name = "lng_emb" if model_args.embedding_strategies == "overlap-replace" else "default"
-        trainer.model.save_embeddings(trainer.args.output_dir, embedding_name)
-        torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
-        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+
+        # FIXME: need to integrate adapterhub's save_embeddings
+        # embedding_name = "lng_emb" if model_args.embedding_strategies == "overlap-replace" else "default"
+        # trainer.model.save_embeddings(trainer.args.output_dir, embedding_name)
+        # torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
+        # torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+
+        torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
+        torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
+
         metrics = train_result.metrics
 
         max_train_samples = (

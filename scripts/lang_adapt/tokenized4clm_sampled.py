@@ -33,6 +33,7 @@ parser.add_argument('--vocab_size', default=130_000, type=int)
 parser.add_argument('--extend_vocab', action='store_true')
 # parser.add_argument('--replace_with_overlap', action='store_true')
 parser.add_argument('--sample_size', default=None, type=int)
+parser.add_argument("--use_auth_token", default=False, action="store_true")
 
 args = parser.parse_args()
 lang = args.lang
@@ -64,16 +65,18 @@ def batch_iterator():
         yield sample
 
 unique_toks = set()
+model_name = pathlib.Path(args.model).parts[-1]
 
 if args.extend_vocab:
+    # FIXME: needs to work on loading the original tokenizer.
     tokenizer = AutoTokenizer.from_pretrained('/tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/exp-009/tr5b-1B3-multilingual-alpha-checkpoints/')
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
     print("✅ Trained tokenizer with len ", len(new_tokenizer))
     added = tokenizer.add_tokens([tok for tok in new_tokenizer.vocab.keys()])
     print(f"Overlap with previous vocab: {args.vocab_size - added}")
-    tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_extend")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_extend")
+    tokenizer.save_pretrained(f"{args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_extend")
+    print(f"Saved tokenizer to {args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_extend")
 
 # elif args.replace_with_overlap:
 #     # 
@@ -86,10 +89,10 @@ if args.extend_vocab:
 #     print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_overlap")
 
 else:
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_auth_token=args.use_auth_token)
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
     print("Unique toks, ", len(unique_toks))
     print("✅ Trained tokenizer with len ", len(new_tokenizer))
-    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_replace")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/{lang}_oscar_{args.sample_size}_tokenizer_{args.vocab_size}_replace")
+    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_replace")
+    print(f"Saved tokenizer to {args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_replace")

@@ -31,13 +31,20 @@ source $FP_BIGS/env_lang_adapter/bin/activate
 
 
 # axis
-LANG="th"
+LANG=$1
 MAX_TRAIN_SAMPLES=$(($SLURM_ARRAY_TASK_ID * 1000))
-BIGS_MODEL="/users/zyong2/data/zyong2/huggingface/bigscience/tr5b-1B3-multilingual-alpha-checkpoints"
+source /tmp-network/user/vnikouli/Projects/bigscience/multilingual-modeling/scripts/env/bin/activate
+FP_BIGS=/tmp-network/user/vnikouli/Projects/bigscience
+model_name="tr5b-1B3-multilingual-alpha-checkpoints/ch${ch}"
+BIGS_MODEL=$FP_BIGS/$model_name
 
+tokenizer_dir=$FP_BIGS/tokenizers/${LANG}_oscar_tokenizer_${sample}_tokenizer_full
+cache_dir=${FP_BIGS}/data/oscar/
+data_dir="${FP_BIGS}/exp-009/madx-bs1b3-multi-ch${ch}-${lng}-sample${data_sample}"
+output_dir="${data_dir}/embft-${adapter_config}-${adapter_reduction_factor}"
+logging_dir="${FP_BIGS}/logs/exp-009/madx-bs1b3-multi-ch${ch}-${dataset}-${lng}-sample${data_sample}-embft-${adapter_config}-${adapter_reduction_factor}"
 
-tokenizer_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/th_oscar_tokenizer_full"
-cache_dir="/users/zyong2/data/zyong2/huggingface/"
+cache_dir=$FP_BIGS/data/
 output_dir="/users/zyong2/data/zyong2/bigscience/data/processed/020/${LANG}_emb_${MAX_TRAIN_SAMPLES}samples"
 logging_dir="/users/zyong2/data/zyong2/bigscience/data/reports/020/${LANG}_emb_${MAX_TRAIN_SAMPLES}samples"
 mkdir -p $output_dir

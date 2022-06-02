@@ -27,9 +27,10 @@ FP_BIGS=/tmp-network/user/vnikouli/Projects/bigscience/
 data_sample=100000
 ch=$1
 lng=$2
+adapter_reduction_factor=$3
 dataset=oscar
 adapter_config="pfeiffer+inv"
-adapter_reduction_factor=48
+
 model_name="tr5b-1B3-multilingual-alpha-checkpoints/ch${ch}"
 tokenizer_dir="${FP_BIGS}/tokenizers/bigscience-1.3B-${lng}-tokenizer"
 cache_dir="${FP_BIGS}/data/${dataset}_${lng}"

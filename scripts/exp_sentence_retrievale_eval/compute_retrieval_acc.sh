@@ -17,6 +17,6 @@
 
 model=$1
 dataset=$2
-outdir=retrieval_acc_${model}-${dataset}
+outdir=../exp-009/retrieval_acc_${model}-${dataset}
 mkdir $outdir
 python eval_sentence_retrieval.py $outdir --pretrained_model $model --tokenizer $model --dataset $dataset

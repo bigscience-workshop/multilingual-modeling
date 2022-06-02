@@ -14,14 +14,11 @@ source $FP_BIGS/multilingual-modeling/scripts/env/bin/activate
 # XNLI (Cross-Lingual and Supervised Setting)
 
 LANG=$1
-data_sample=$2
-vocabsize=$3
-adapter_reduction_factor=$4
-
+MODEL_DIR=$2
+TOKENIZER_DIR=$3
 ch=118500
+emb_strategy="replace"
 
-
-adapter_config="pfeiffer+inv"
 model_name="tr5b-1B3-multilingual-alpha-checkpoints/ch${ch}"
 ORIGINAL_MODEL=${FP_BIGS}/multilingual-modeling/scripts/exp-009/$model_name 
 TOKENIZER_DIR="${FP_BIGS}/tokenizers/${LANG}_oscar_${data_sample}_tokenizer_${vocabsize}" #default tok settings with vocab size = 24k
@@ -29,7 +26,7 @@ CACHE_DIR="${FP_BIGS}/data/"
 data_dir="${FP_BIGS}/exp-ext-${LANG}/madx-bs1b3-multi-ch${ch}-${LANG}-sample${data_sample}-$( basename $TOKENIZER_DIR )"
 data_tok_dir=${data_dir}/lng_tok
 
-MODEL_DIR="${data_dir}/bs1.3B${ch}-${adapter_config}-${adapter_reduction_factor}-es5"
+
 XNLI_ZH_DIR=$ORIGINAL_MODEL/xnli_task_adapter_full
 LR=1e-5
 
@@ -55,7 +52,8 @@ $XNLI_ZH_DIR \
 --do_eval_after_train \
 --madx_lang_adapter $MADX_LANG_ADAPTER_NAME \
 --finetune_strategies "task_adapters" \
---zero_shot &> $XNLI_ZH_DIR/$( basename $data_dir )-$( basename $MODEL_DIR )_eval.log
+--croll_lingual
+# &> $XNLI_ZH_DIR/$( basename $data_dir )-$( basename $MODEL_DIR )_eval.log
 
 
 

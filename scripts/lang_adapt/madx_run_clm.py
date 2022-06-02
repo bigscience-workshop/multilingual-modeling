@@ -412,10 +412,10 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
 
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #if "emb" in model_args.lang_adapt_strategies:
-    #    if "replace" in model_args.embedding_strategies:
-    #        for name, param in model.named_parameters():
-    #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
-    #                param.requires_grad = False
+    if "replace" in model_args.embedding_strategies:
+        for name, param in model.named_parameters():
+            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
+                param.requires_grad = False
 
 
     # Setup adapters
@@ -474,12 +474,19 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     if model_args.embedding_strategies == "overlap-replace":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
-        model._active_embedding = "lng_emb"
-        model.delete_embeddings('default')
+
+        ref_embedding = model.transformer.wte
+        model.resize_token_embeddings(len(tokenizer))
+        overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
+        curr_vocab = tokenizer.vocab
+        orig_vocab = orig_tokenizer.vocab
+        for t in overlap:
+            model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
         model.tie_weights()
+
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
+        model.tie_weights()
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
@@ -597,8 +604,11 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
         # save embedding and positional embedding (which is not saved by trainer)
-        trainer.model.save_embeddings(trainer.args.output_dir, 'lng_emb')
-        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/positional_embedding.pt')
+        #if args.embedding_strategies == "overlap-replace":
+        #    trainer.model.save_embeddings(trainer.args.output_dir, 'lng_emb')
+        #else:
+        torch.save(trainer.model.transformer.wte.weight.data, f'{trainer.args.output_dir}/embedding.pt')
+        torch.save(trainer.model.transformer.wpe.weight.data, f'{trainer.args.output_dir}/positional_embedding.pt')
 
         metrics = train_result.metrics
 

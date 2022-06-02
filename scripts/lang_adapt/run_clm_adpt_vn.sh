@@ -28,9 +28,9 @@ lng=$2
 adapter_reduction_factor=$3
 dataset=oscar
 adapter_config="pfeiffer+inv"
-vocabsize=1000
+vocabsize=$4
 model_name="tr5b-1B3-multilingual-alpha-checkpoints/ch${ch}"
-tokenizer_dir="${FP_BIGS}/tokenizers/${lng}_oscar_${data_sample}_tokenizer_${vocabsize}" #default tok settings with vocab size = 24k
+tokenizer_dir="${FP_BIGS}/tokenizers/${lng}_oscar_${data_sample}_tokenizer_${vocabsize}_overlap" #default tok settings with vocab size = 24k
 cache_dir="${FP_BIGS}/data/"
 data_dir="${FP_BIGS}/exp-ext-${lng}/madx-bs1b3-multi-ch${ch}-${lng}-sample${data_sample}-$( basename $tokenizer_dir )"
 data_tok_dir=${data_dir}/lng_tok

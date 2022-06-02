@@ -108,12 +108,14 @@ def get_hidden_states(args, model):
     fig, ax = plt.subplots(1, int(nb_states/step), figsize=(12*int(nb_states/step), 10))
 
 
-    with open(f"{outname}.log", 'w') as fout:
+#    with open(f"{outname}.log", 'w') as fout:
+    with open(f"tmp.log", 'w') as fout:
         for state in range(0, nb_states, step):
             plot_retrieval_acc(state, emb, ax[int(state/step)], fout)
 
     fig.tight_layout()
-    plt.savefig(f'{outname}-heatmap.png')
+    #plt.savefig(f'{outname}-heatmap.png')
+    plt.savefig(f'tmp-heatmap.png')
 
 
 def get_hidden_states_for_flores(args, model, mname, nb_samples=50):
@@ -172,6 +174,7 @@ def compute_sent_retrieval_acc(lng1, lng2, emb, state, out):
     E2 = torch.stack([s[1] for s in emb[lng2][state]])
     #cos_matrix = [[cos(E2[i],E1[j]) for i in range(E2.shape[0]) ] for j in range(E1.shape[0])]    
     match = 0
+
     intersection_ids = set([emb[lng1][state][i][0] for i in range(E1.shape[0])]).intersection(
         set([emb[lng2][state][i][0] for i in range(E2.shape[0])])
     )

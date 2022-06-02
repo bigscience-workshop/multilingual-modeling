@@ -30,6 +30,8 @@ parser.add_argument('--tokenizer_dir', type=str, required=True)
 parser.add_argument('--hf_cache_dir', default="~/.cache/huggingface/transformers", type=str)
 parser.add_argument('--vocab_size', default=130_000, type=int)
 parser.add_argument('--extend_vocab', action='store_true')
+parser.add_argument('--sample_size', default=None, type=int)
+
 args = parser.parse_args()
 lang = args.lang
 if args.extend_vocab:

@@ -30,7 +30,6 @@ module load gitlfs/2.7.1
 source $FP_BIGS/env_lang_adapter/bin/activate
 
 
-# axis
 LANG="th"
 MAX_TRAIN_SAMPLES=$(($SLURM_ARRAY_TASK_ID * 1000))
 BIGS_MODEL="/users/zyong2/data/zyong2/huggingface/bigscience/tr5b-1B3-multilingual-alpha-checkpoints"

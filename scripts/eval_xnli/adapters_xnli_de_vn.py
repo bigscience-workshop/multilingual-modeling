@@ -10,7 +10,7 @@ import torch
 import numpy as np
 from transformers import TrainingArguments, Trainer, AdapterTrainer
 from transformers import AutoTokenizer, GPT2Tokenizer, GPT2ForSequenceClassification, AutoModelForCausalLM
-
+from transformers.adapters.configuration import AdapterConfig
 # setup logging
 import sys
 from loguru import logger
@@ -25,7 +25,7 @@ parser.add_argument("--lang", type=str, default="de")
 parser.add_argument("--cache_dir")
 parser.add_argument("--num_train_epochs", type=int, default=30)
 parser.add_argument("--learning_rate", type=float, default=1e-5)
-parser.add_argument("--per_device_train_batch_size", type=int, default=4)
+parser.add_argument("--per_device_train_batch_size", type=int, default=8)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
 parser.add_argument("--pretrained_model") 
 parser.add_argument("--original_model")  
@@ -33,10 +33,10 @@ parser.add_argument("--tokenizer")
 parser.add_argument("--do_train", default=False, action="store_true")
 parser.add_argument("--do_eval_after_train", default=False, action="store_true")
 parser.add_argument("--do_predict", default=False, action="store_true")
-parser.add_argument("--use_partial_data", default=False, action="store_true")
+parser.add_argument("--use_partial_data", default=None, type=int)
 parser.add_argument("--cross_lingual", default=False, action="store_true")
 
-finetune_strategies = ["whole", "lang_adapters", "task_adapters"]
+finetune_strategies = ["whole", "lang_adapters", "task_adapters", "classification_head", "task_adapter_last_layer"]
 parser.add_argument("--madx_lang_adapter")
 #parser.add_argument("--adapter_lang_name", required=True) -- why is this required??
 parser.add_argument("--finetune_strategies", choices=finetune_strategies, required=True)
@@ -57,11 +57,13 @@ print(args)
 if args.cross_lingual:
     print("0️⃣ 0-Shot")
     # 0-shot: use english as train and validation
-    xnli_en_dataset = load_dataset("xnli", "en", cache_dir=args.cache_dir)
+    if args.do_train:
+        xnli_en_dataset = load_dataset("xnli", "en", cache_dir=args.cache_dir)
     xnli_dataset = load_dataset("xnli", args.lang, cache_dir=args.cache_dir)
-    assert args.lang != "en"
-    train_dataset = xnli_en_dataset['train']
-    val_dataset = xnli_en_dataset['validation']
+#    assert args.lang != "en"
+    if args.do_train:
+        train_dataset = xnli_en_dataset['train']
+        val_dataset = xnli_en_dataset['validation']
     test_dataset = xnli_dataset['test']
 else:
     print("👀 Supervised Training")
@@ -72,18 +74,24 @@ else:
     test_dataset = xnli_dataset['test']
 
 
-# load tokenizer
-tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir)
-tokenizer.pad_token = tokenizer.eos_token  # tokenizer.encode(tokenizer.eos_token) = [0]
-if args.cross_lingual:
-    en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir) # has to use AutoTokenizer instead of GPT2Tokenizer
-    en_tokenizer.pad_token = en_tokenizer.eos_token
-
-def tokenize_function(examples):
-    return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
+en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir) # has to use AutoTokenizer instead of GPT2Tokenizer
+en_tokenizer.pad_token = en_tokenizer.eos_token
 
 def en_tokenize_function(examples):
-    return en_tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
+    return en_tokenizer(f'{examples["premise"]} {en_tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
+if args.tokenizer:
+    # load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir)
+    tokenizer.pad_token = tokenizer.eos_token  # tokenizer.encode(tokenizer.eos_token) = [0]
+
+    def tokenize_function(examples):
+        return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
+else:
+    def tokenize_function(examples):
+        return en_tokenize_function(examples)
+    tokenizer = en_tokenizer
+    
+
 
 
 logger.info("Tokenizing the dataset...")
@@ -95,9 +103,9 @@ if args.do_train:
         full_train_dataset = train_dataset.map(tokenize_function, batched=False)
         full_val_dataset = val_dataset.map(tokenize_function, batched=False)
 
-
-    small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(100))
-    small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(100))
+if args.use_partial_data:
+    small_train_dataset = full_train_dataset.shuffle(seed=42).select(range(args.use_partial_data))
+    small_val_dataset = full_val_dataset.shuffle(seed=42).select(range(min(1000, args.use_partial_data)))
     logger.info(full_train_dataset[0])
     logger.info(full_train_dataset[100])
 
@@ -118,6 +126,8 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     do_train=True,
     do_eval=True,
+    fp16=True,
+    fp16_full_eval=True,
     eval_steps=500 if not args.use_partial_data else 10,
     num_train_epochs=args.num_train_epochs,
     per_device_train_batch_size=args.per_device_train_batch_size,
@@ -132,98 +142,132 @@ training_args = TrainingArguments(
     load_best_model_at_end=True,
 )
 
+     
+
 def load_model(args, inference=False):
-    # FIXME: if we load with GPT2ForSequenceClassification, the embeddings are the original one 
-    # even when we call load_adapter
-    if not args.original_model == args.pretrained_model and not args.cross_lingual:
-        wte = torch.load(f'{args.pretrained_model}/embedding.pt')
-        wpe = torch.load(f'{args.pretrained_model}/positional_embedding.pt')        
         
     model = GPT2ForSequenceClassification.from_pretrained(args.original_model, 
                                                           num_labels=3,
                                                           pad_token_id=en_tokenizer.pad_token_id,
                                                           cache_dir=args.cache_dir)
 
-    if inference or not args.cross_lingual:
+    if not args.cross_lingual or inference:
         # need to load embedding/adapters from the model adapted to the new language
         causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
         causal_lm_model.resize_token_embeddings(len(tokenizer))
-        if not args.original_model == args.pretrained_model:
-            causal_lm_model.transformer.wte = wte
-            causal_lm_model.transformer.wpe = wpe
         if args.madx_lang_adapter:
-            adapter_name = causal_lm_model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")                                    
+            lang_adapter_name = causal_lm_model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")                                    
             model.transformer = causal_lm_model.transformer
             model.set_active_adapters(adapter_name)
+        if not args.original_model == args.pretrained_model:
+            wte = torch.load(f'{args.pretrained_model}/embedding.pt')
+            wpe = torch.load(f'{args.pretrained_model}/positional_embedding.pt')        
+            model.transformer.wte.weight.data = wte
+            model.transformer.wpe.weight.data = wpe
+
 
     if not inference:
-        #if not args.cross_lingual: normally need to add adapter in any case
-            # normally this is already done, why use adapter_lang_name here?
-            #if args.madx_lang_adapter:
-            #    adapter_name = model.load_adapter(args.madx_lang_adapter,
-            #                                    config="pfeiffer+inv",
-            #                                    load_as=args.adapter_lang_name)
-        model.add_adapter("xnli-task-adapter")
-        model.train_adapter("xnli-task-adapter")
+        if args.finetune_strategies == "task_adapters":
+            model.add_adapter("xnli-task-adapter")
+            model.train_adapter("xnli-task-adapter")
 
+        if args.finetune_strategies == "task_adapter_last_layer":
+            adapter_config = AdapterConfig.load(
+                "pfeiffer+inv",
+                reduction_factor=16,
+                leave_out = [i for i in range(0,23)]
+            )
+            model.add_adapter("xnli-task-adapter-ll", config=adapter_config)
+            model.train_adapter("xnli-task-adapter-ll")
+            
 
         print("🔥 ==================== Training: ==================== 🔥")
         for name, param in model.named_parameters():
+            if args.finetune_strategies == "whole":
+                param.requires_grad = True
+            elif args.finetune_strategies == "classification_head":
+                if name == "score.weight":
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
             if not param.requires_grad:
-                print(f"🥶 Frozen layer '{name}'")
+                print(f"🥶 Frozenlayer '{name}'")
             else:
                 print(f"🚀 Trainable layer '{name}'")
         print(model)
+
     else:
-        #if args.madx_lang_adapter:
-        assert args.pretrained_adapters_dir 
-            # normally this is done in any case
-            #adapter_name = model.load_adapter(args.madx_lang_adapter)
-            #model.set_active_adapters(adapter_name)
-        adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xnli-task-adapter")
-        model.set_active_adapters(adapter_name)
-        #else:
-        #        # adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/013/xnli_de_de_100K_adpt_16_0shot/checkpoint-24544/xnli-task-adapter")
-        #        # not sure what happens here
-        #        # for TGT -> TGT supervised finetuning setting, change adapter_name
-        #        adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/exp-013/task_xnli_de_ft_100000_ori/checkpoint-24544/xnli-task-adapter")
-        #        model.set_active_adapters(adapter_name)
+        if args.finetune_strategies == "task_adapters":
+            assert args.pretrained_adapters_dir 
+            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xnli-task-adapter")
+            model.set_active_adapters(adapter_name)            
+        elif args.finetune_strategies == "task_adapter_last_layer":
+            assert args.pretrained_adapters_dir 
+            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/xnli-task-adapter-ll")
+            model.set_active_adapters(adapter_name)
+
         print(model)
+        #Need to make sure that we use correct embeddings and adapter -- TBC?
+        model.transformer.wte.weight.data = wte
+        model.transformer.wpe.weight.data = wpe
+
 
     return model
 
 if args.do_train:
     logger.info("Start Training")
     model = load_model(args)
-    trainer = AdapterTrainer(
-        model=model, 
-        args=training_args, 
-        train_dataset=small_train_dataset if args.use_partial_data else full_train_dataset, 
-        eval_dataset=small_val_dataset if args.use_partial_data else full_val_dataset, 
-        compute_metrics=compute_metrics
-    )
+    if args.finetune_strategies in ["task_adapters", "task_adapter_last_layer"] :
+        trainer = AdapterTrainer(
+            model=model, 
+            args=training_args, 
+            train_dataset=small_train_dataset if args.use_partial_data else full_train_dataset, 
+            eval_dataset=small_val_dataset if args.use_partial_data else full_val_dataset, 
+            compute_metrics=compute_metrics
+        )
+    else:
+        trainer = Trainer(
+            model=model, 
+            args=training_args, 
+            train_dataset=small_train_dataset if args.use_partial_data else full_train_dataset, 
+            eval_dataset=small_val_dataset if args.use_partial_data else full_val_dataset, 
+            compute_metrics=compute_metrics
+        )
 
     trainer.train()
+#    trainer.save_model()
 
-if args.do_predict:
+if args.do_predict and not args.do_train:
     if args.do_eval_after_train:
         evaluation_dirs = list(sorted([
                     checkpoint_dir
                     for checkpoint_dir in os.listdir(args.output_dir)
                     if checkpoint_dir.startswith('checkpoint-')
                 ], key=lambda x: int(x[len('checkpoint-'):])))
-        if args.madx_lang_adapter:
-            args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
-            logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
+
+        args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
+        logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
 
     model = load_model(args, inference=True)
-    training_args.report_to = list()
-    
-    trainer = AdapterTrainer(
-        model=model, 
-        args=training_args, 
-        eval_dataset=small_test_dataset if args.use_partial_data else full_test_dataset, 
-        compute_metrics=compute_metrics
-    )
 
+    training_args.report_to = list()
+    if args.finetune_strategies in ["task_adapters", "task_adapter_last_layer"]:
+        trainer = AdapterTrainer(
+            model=model, 
+            args=training_args, 
+            eval_dataset=full_test_dataset, 
+            compute_metrics=compute_metrics
+        )
+    else:
+        trainer = Trainer(
+            model=model, 
+            args=training_args, 
+            train_dataset=small_train_dataset if args.use_partial_data else full_train_dataset, 
+            eval_dataset=full_test_dataset, 
+            compute_metrics=compute_metrics
+        )
+
+    print("Evaluate on Test:", trainer.evaluate())
+
+elif args.do_predict and args.do_train:
     print("Evaluate on Test:", trainer.evaluate())

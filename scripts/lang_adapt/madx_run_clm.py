@@ -653,17 +653,17 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
         # save embedding and positional embedding (which is not saved by trainer)
-
-        # FIXME: need to integrate adapterhub's save_embeddings
-        # embedding_name = "lng_emb" if model_args.embedding_strategies == "overlap-replace" else "default"
-        # trainer.model.save_embeddings(trainer.args.output_dir, embedding_name)
         
-        torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
-        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+        # This part is used if we use initial BS 1b3 model  (the one used for experiments reported in the paper)
+        if hasattr(trainer.model.transformer, "wte"):
+            torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
+        if hasattr(trainer.model.transformer, "wpe"):
+            torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
         
-        # I assume 
-        #torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
-        #torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
+        # this part is used for BLOOM models
+        if hasattr(trainer.model.transformer, "word_embeddings"):
+            torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
+            torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
 
         metrics = train_result.metrics
 

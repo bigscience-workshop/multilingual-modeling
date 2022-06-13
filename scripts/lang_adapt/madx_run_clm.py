@@ -34,6 +34,8 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
+from transformers.adapters import PrefixTuningConfig
+
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -109,7 +111,11 @@ class ModelArguments:
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
     )
-
+    adapter_placement: str = field(
+        default="all", 
+        metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},
+    )
+    
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
             raise ValueError(
@@ -433,19 +439,42 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
     #                param.requires_grad = False
 
+    def get_adapter_config(adapter_args, model_args):
+        if adapter_args.adapter_config == "prefix_tuning":
+            if model_args.adapter_placement == "all":
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
+                                                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
+
+
+        else:
+
+            if model_args.adapter_placement == "all":
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor        
+                )
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor,
+                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
+        return adapter_config
 
     # Setup adapters
     if adapter_args.train_adapter:
         task_name = data_args.dataset_name or "clm"
-        task_name += f"_{adapter_args.language}"
+        task_name += f"_{adapter_args.adapter_config}_{adapter_args.language}"
         # check if adapter already exists, otherwise add it
         if task_name not in model.config.adapters:
-            # resolve the adapter config
-            adapter_config = AdapterConfig.load(
-                adapter_args.adapter_config,
-                non_linearity=adapter_args.adapter_non_linearity,
-                reduction_factor=adapter_args.adapter_reduction_factor,
-            )
+            adapter_config = get_adapter_config(adapter_args, model_args)
             # load a pre-trained from Hub if specified
             if adapter_args.load_adapter:
                 model.load_adapter(
@@ -628,11 +657,13 @@ def main():
         # FIXME: need to integrate adapterhub's save_embeddings
         # embedding_name = "lng_emb" if model_args.embedding_strategies == "overlap-replace" else "default"
         # trainer.model.save_embeddings(trainer.args.output_dir, embedding_name)
-        # torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
-        # torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
-
-        torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
-        torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
+        
+        torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
+        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+        
+        # I assume 
+        #torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
+        #torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
 
         metrics = train_result.metrics
 

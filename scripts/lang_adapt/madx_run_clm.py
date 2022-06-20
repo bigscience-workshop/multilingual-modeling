@@ -34,6 +34,8 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
+from transformers.adapters import PrefixTuningConfig
+
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -109,7 +111,11 @@ class ModelArguments:
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
     )
-
+    adapter_placement: str = field(
+        default="all", 
+        metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},
+    )
+    
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
             raise ValueError(
@@ -433,19 +439,42 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
     #                param.requires_grad = False
 
+    def get_adapter_config(adapter_args, model_args):
+        if adapter_args.adapter_config == "prefix_tuning":
+            if model_args.adapter_placement == "all":
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
+                                                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
+
+
+        else:
+
+            if model_args.adapter_placement == "all":
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor        
+                )
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor,
+                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
+        return adapter_config
 
     # Setup adapters
     if adapter_args.train_adapter:
         task_name = data_args.dataset_name or "clm"
-        task_name += f"_{adapter_args.language}"
+        task_name += f"_{adapter_args.adapter_config}_{adapter_args.language}"
         # check if adapter already exists, otherwise add it
         if task_name not in model.config.adapters:
-            # resolve the adapter config
-            adapter_config = AdapterConfig.load(
-                adapter_args.adapter_config,
-                non_linearity=adapter_args.adapter_non_linearity,
-                reduction_factor=adapter_args.adapter_reduction_factor,
-            )
+            adapter_config = get_adapter_config(adapter_args, model_args)
             # load a pre-trained from Hub if specified
             if adapter_args.load_adapter:
                 model.load_adapter(
@@ -487,21 +516,38 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             )
 
     print(f"✅ Use Embedding Strategy: {model_args.embedding_strategies}")
+
     if model_args.embedding_strategies == "overlap-replace":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
-        model._active_embedding = "lng_emb"
-        model.delete_embeddings('default')
+
+        ref_embedding = model.transformer.wte
+        model.resize_token_embeddings(len(tokenizer))
+        overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
+        curr_vocab = tokenizer.vocab
+        orig_vocab = orig_tokenizer.vocab
+        for t in overlap:
+            model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
         model.tie_weights()
+
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
+        model.tie_weights()
+    #if model_args.embedding_strategies == "overlap-replace":
+    #    if not tokenizer.name_or_path == model_args.model_name_or_path:
+    #        orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    #    model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
+    #    model._active_embedding = "lng_emb"
+    #    model.delete_embeddings('default')
+    #    model.tie_weights()
+    #elif model_args.embedding_strategies == "replace":
+    #    model.resize_token_embeddings(len(tokenizer))
 
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
     for name, param in model.named_parameters():
-        if "word_embeddings" in name:
+        if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
             param.requires_grad = True
             emb_params += param.numel()
         elif model_args.lang_adapt_strategies == "emb":
@@ -514,13 +560,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             print(f"🚀 Trainable layer '{name}'")
             trainable_params += param.numel()
          
-        if "wte" and "wpe" in name:
-            emb_params += param.numel()
 
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -611,7 +654,6 @@ def main():
 
     print("Model: 👇")
     print(model)
-
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -624,15 +666,17 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
         # save embedding and positional embedding (which is not saved by trainer)
-
-        # FIXME: need to integrate adapterhub's save_embeddings
-        # embedding_name = "lng_emb" if model_args.embedding_strategies == "overlap-replace" else "default"
-        # trainer.model.save_embeddings(trainer.args.output_dir, embedding_name)
-        # torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
-        # torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
-
-        torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
-        torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
+        
+        # This part is used if we use initial BS 1b3 model  (the one used for experiments reported in the paper)
+        if hasattr(trainer.model.transformer, "wte"):
+            torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
+        if hasattr(trainer.model.transformer, "wpe"):
+            torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+        
+        # this part is used for BLOOM models
+        if hasattr(trainer.model.transformer, "word_embeddings"):
+            torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
+            torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
 
         metrics = train_result.metrics
 

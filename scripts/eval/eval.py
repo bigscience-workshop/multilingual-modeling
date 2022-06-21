@@ -10,7 +10,7 @@ import nltk
 import torch
 import numpy as np
 from transformers import TrainingArguments, Trainer, Seq2SeqTrainer, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
-from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoModelForTokenClassification
 from transformers import DataCollatorForSeq2Seq
 from transformers import (
     get_linear_schedule_with_warmup,
@@ -47,7 +47,7 @@ parser.add_argument("--learning_rate", type=float, default=1e-5)
 parser.add_argument("--per_device_train_batch_size", type=int, default=4)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
 parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
-parser.add_argument("--adapted_model") 
+parser.add_argument("--adapted_model_dir")
 parser.add_argument("--original_model")  
 parser.add_argument("--tokenizer")
 parser.add_argument("--do_train", default=False, action="store_true")
@@ -67,25 +67,25 @@ parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 
 # mapping of tasks to model/trainer classes
-model_class_mapping = {XNLI: AutoModelForSequenceClassification, XLSUM: AutoModelWithLMHead}
+model_class_mapping = {
+    XNLI: AutoModelForSequenceClassification, 
+    XLSUM: AutoModelWithLMHead
+}
 trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer}
 trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer}
 trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments}
-
 
 args = parser.parse_args()
 
 #### Process args
 if not args.cross_lingual and not args.train_lang:
     args.train_lang = args.lang
-
-if args.train_lang != args.lang:
-    assert args.cross_lingual
-elif args.train_lang == args.lang:
-    assert not args.cross_lingual
+# ensure that only when cross_lingual, train_lang is not the same as lang
+assert not ((args.train_lang != args.lang) ^ args.cross_lingual)
 
 if args.baseline:
     logger.warning("❗️ No 'madx_lang_adapter' loaded. This should be the baseline performance.")
+    assert not args.madx_lang_adapter
 
 # additional args to pass to the model init. task-dependent
 optional_model_kwargs = {}
@@ -104,8 +104,8 @@ if args.local_rank:
     torch.cuda.set_device(args.local_rank)
 
 if args.original_model is None:
-    # here: because the wpe is not saved, adapted_model is the original bigsciece model
-    args.original_model = args.adapted_model
+    # here: because the wpe is not saved, adapted_model_dir is the original bigsciece model
+    args.original_model = args.adapted_model_dir
 
 print("Arguments: ========")
 print(args)
@@ -324,31 +324,31 @@ def load_model(args, inference=False):
             model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             return model
         else:
-            print("yes")
             adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
             model.set_active_adapters(adapter_name)
             return model
 
     def load_embedding_layers(args, tokenizer, model):
+        ###### legacy code
         # # use original causal LM model to load the embedding layers
         # causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
         # causal_lm_model.resize_token_embeddings(len(tokenizer))
-        # if not args.original_model == args.adapted_model:
+        # if not args.original_model == args.adapted_model_dir:
         #     causal_lm_model.transformer.wte = wte
         #     causal_lm_model.transformer.wpe = wpe
 
         if "tr5b-1B3" in args.original_model: # previous 1.3B bigsience model
-            token_embedding = torch.load(f'{args.adapted_model}/embedding_wte.pt')
-            add_embedding = torch.load(f'{args.adapted_model}/embedding_wpe.pt')
+            token_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wte.pt')
+            add_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wpe.pt')
             model.transformer.wte = token_embedding
             model.transformer.wpe = add_embedding
         
         elif "bloom" in args.original_model:
-            token_embedding = torch.load(f'{args.adapted_model}/word_embeddings.pt')
-            add_embedding = torch.load(f'{args.adapted_model}/word_embeddings_layernorm.pt')
+            token_embedding = torch.load(f'{args.adapted_model_dir}/word_embeddings.pt')
+            add_embedding = torch.load(f'{args.adapted_model_dir}/word_embeddings_layernorm.pt')
             model.transformer.word_embeddings = token_embedding
             model.transformer.word_embeddings_layernorm = add_embedding
-        
+
         return model
     
     def load_language_adapters(args, model):
@@ -358,12 +358,13 @@ def load_model(args, inference=False):
 
     pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id
     model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
-                                                            pad_token_id=pad_token_id,
-                                                            cache_dir=args.cache_dir,
-                                                            revision=args.revision,
-                                                            **optional_model_kwargs)
+                                                              pad_token_id=pad_token_id,
+                                                              cache_dir=args.cache_dir,
+                                                              revision=args.revision,
+                                                              **optional_model_kwargs)
 
-    # baseline: only need to add task-specific adapters
+    # baseline: only need to add task-specific adapters 
+    # (keeps separated for now for easier debugging)
     if args.baseline:
         model = load_task_specific_adapters(args, model, inference)
         return model
@@ -371,51 +372,10 @@ def load_model(args, inference=False):
     # adapted models
     if not args.cross_lingual or inference:
         model = load_embedding_layers(args, tokenizer, model)
-        model = load_language_adapters(args, model)
+        if args.madx_lang_adapter:
+            model = load_language_adapters(args, model)
     
     model = load_task_specific_adapters(args, model, inference)
-    return model
-    
-    
-    # load embedding layers
-    if not args.cross_lingual or inference:
-        print(model.transformer.wte.weight)
-        model.transformer.wte = wte
-        print(model.transformer.wte.weight)
-        assert False
-        # need to load embedding/adapters from the model adapted to the new language
-        
-        if args.madx_lang_adapter:
-            adapter_name = causal_lm_model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")                                    
-            model.transformer = causal_lm_model.transformer
-            model.set_active_adapters(adapter_name)
-
-
-    if not inference:
-        #if not args.cross_lingual: normally need to add adapter in any case
-            # normally this is already done, why use adapter_lang_name here?
-            #if args.madx_lang_adapter:
-            #    adapter_name = model.load_adapter(args.madx_lang_adapter,
-            #                                    config="pfeiffer+inv",
-            #                                    load_as=args.adapter_lang_name)
-        model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
-        model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
-
-    else:
-        #if args.madx_lang_adapter:
-        assert args.pretrained_adapters_dir 
-            # normally this is done in any case
-            #adapter_name = model.load_adapter(args.madx_lang_adapter)
-            #model.set_active_adapters(adapter_name)
-        adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset}-task-adapter")
-        model.set_active_adapters(adapter_name)
-        #else:
-        #        # adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/013/xnli_de_de_100K_adpt_16_0shot/checkpoint-24544/xnli-task-adapter")
-        #        # not sure what happens here
-        #        # for TGT -> TGT supervised finetuning setting, change adapter_name
-        #        adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/exp-013/task_xnli_de_ft_100000_ori/checkpoint-24544/xnli-task-adapter")
-        #        model.set_active_adapters(adapter_name)
-        print(model)
     return model
 
 

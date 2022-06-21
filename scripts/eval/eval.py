@@ -61,8 +61,6 @@ parser.add_argument("--revision", type=str, default="main")
 parser.add_argument("--local_rank", type=int)
 
 parser.add_argument("--madx_lang_adapter", default=None)
-parser.add_argument("--no_task_adapter", default=False, action="store_true")
-# parser.add_argument("--adapter_lang_name", required=True)
 parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 

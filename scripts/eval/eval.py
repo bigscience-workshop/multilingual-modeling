@@ -29,6 +29,7 @@ logger.add(sys.stderr, format="{level} {level.icon} | [{time}] - {message}")
 # AVAILABLE TASKS
 XNLI = "xnli"
 XLSUM = "csebuetnlp/xlsum"
+WIKIANN = "wikiann"
 
 # parser
 parser = argparse.ArgumentParser()
@@ -36,7 +37,7 @@ parser.add_argument("output_dir")
 parser.add_argument("--train_lang", type=str) 
 parser.add_argument("--lang", type=str) #xlsum requires a language name, not language code
 
-tasks = [XNLI, XLSUM]
+tasks = [XNLI, XLSUM, WIKIANN]
 parser.add_argument("--dataset", choices=tasks, required=True)
 
 parser.add_argument("--cache_dir")
@@ -67,11 +68,12 @@ parser.add_argument("--deepspeed", required=False)
 # mapping of tasks to model/trainer classes
 model_class_mapping = {
     XNLI: AutoModelForSequenceClassification, 
-    XLSUM: AutoModelWithLMHead
+    XLSUM: AutoModelWithLMHead,
+    WIKIANN: AutoModelForTokenClassification
 }
-trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer}
-trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer}
-trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments}
+trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer, WIKIANN: Trainer}
+trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer, WIKIANN: AdapterTrainer}
+trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments, WIKIANN: TrainingArguments}
 
 args = parser.parse_args()
 
@@ -91,6 +93,8 @@ optional_trainer_args = {}
 optional_eval_args = {}
 if args.dataset == XNLI:
     optional_model_kwargs = {"num_labels": 3}
+elif args.dataset == WIKIANN:
+    optional_model_kwargs = {"num_labels": 7}
 elif args.dataset == XLSUM:
     optional_trainer_args = {"generation_max_length": 512 + 64, 
                              "predict_with_generate":True,
@@ -192,6 +196,28 @@ elif args.dataset == XLSUM:
 
         return inputs
 
+elif args.dataset == WIKIANN:
+    def tokenize_function(examples):
+        tokenized_inputs = tokenizer(examples['tokens'], is_split_into_words=True, max_length=128, padding="max_length", truncation=True)
+
+        word_ids = tokenized_inputs.word_ids()  # Map tokens to their respective word.
+        previous_word_idx = None
+        label_ids = []
+        for word_idx in word_ids:  # Set the special tokens to -100.
+            if word_idx is None:
+                label_ids.append(-100)
+            elif word_idx != previous_word_idx:  # Only label the first token of a given word.
+                label_ids.append(examples[f"ner_tags"][word_idx])
+            else:
+                label_ids.append(-100)
+            previous_word_idx = word_idx
+
+        tokenized_inputs["labels"] = label_ids
+        return tokenized_inputs
+
+    def en_tokenize_function(examples):
+        return en_tokenizer(examples['tokens'], is_split_into_words=True, max_length=128, padding="max_length", truncation=True)
+
 
 # tokenizing the dataset
 logger.info("Tokenizing the dataset...")
@@ -219,6 +245,28 @@ if args.dataset == XNLI:
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
         return metric.compute(predictions=predictions, references=labels)
+
+elif args.dataset == WIKIANN:
+    metric = load_metric("seqeval")
+    idx2labelname = {i: label for i, label in enumerate(dataset["train"].features[f"ner_tags"].feature.names)}
+
+    def compute_metrics(eval_pred):
+        logits, golds = eval_pred
+        predictions = np.argmax(logits, axis=-1)
+
+        converted_golds = list()
+        converted_preds = list()
+
+        for i in range(golds.shape[0]):
+            gold, pred = list(), list()
+            for j in range(golds.shape[1]):
+                if golds[i][j] != -100:
+                    gold.append(idx2labelname[golds[i][j]])
+                    pred.append(idx2labelname[predictions[i][j]])
+            converted_golds.append(gold)
+            converted_preds.append(pred)
+
+        return metric.compute(predictions=converted_preds, references=converted_golds)
 
 elif args.dataset == XLSUM:
     metric = load_metric('rouge')

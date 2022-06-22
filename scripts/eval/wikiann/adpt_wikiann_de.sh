@@ -59,9 +59,5 @@ $OUTPUT_DIR \
 --adapted_model_dir $ADAPTER_MODEL_DIR \
 --madx_lang_adapter $MADX \
 --tokenizer $TOKENIZER_NAME \
---do_predict \
---use_partial_data \
---use_partial_train_data 100 \
---use_partial_val_data 100 \
---use_partial_test_data 100
-
+--do_train \
+--do_predict

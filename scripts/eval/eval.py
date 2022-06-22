@@ -10,7 +10,7 @@ import nltk
 import torch
 import numpy as np
 from transformers import TrainingArguments, Trainer, Seq2SeqTrainer, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
-from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoModelForTokenClassification
 from transformers import DataCollatorForSeq2Seq
 from transformers import (
     get_linear_schedule_with_warmup,
@@ -29,13 +29,15 @@ logger.add(sys.stderr, format="{level} {level.icon} | [{time}] - {message}")
 # AVAILABLE TASKS
 XNLI = "xnli"
 XLSUM = "csebuetnlp/xlsum"
+WIKIANN = "wikiann"
 
 # parser
 parser = argparse.ArgumentParser()
 parser.add_argument("output_dir")
-parser.add_argument("--lang", type=str, default="german") #xlsum requires a language name, not language code
+parser.add_argument("--train_lang", type=str) 
+parser.add_argument("--lang", type=str) #xlsum requires a language name, not language code
 
-tasks = [XNLI, XLSUM]
+tasks = [XNLI, XLSUM, WIKIANN]
 parser.add_argument("--dataset", choices=tasks, required=True)
 
 parser.add_argument("--cache_dir")
@@ -46,11 +48,10 @@ parser.add_argument("--learning_rate", type=float, default=1e-5)
 parser.add_argument("--per_device_train_batch_size", type=int, default=4)
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
 parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
-parser.add_argument("--adapted_model") 
+parser.add_argument("--adapted_model_dir")
 parser.add_argument("--original_model")  
 parser.add_argument("--tokenizer")
 parser.add_argument("--do_train", default=False, action="store_true")
-parser.add_argument("--do_eval_after_train", default=False, action="store_true")
 parser.add_argument("--do_predict", default=False, action="store_true")
 parser.add_argument("--use_partial_data", default=False, action="store_true")
 parser.add_argument("--use_partial_train_data", type=int, default=100)
@@ -61,25 +62,30 @@ parser.add_argument("--revision", type=str, default="main")
 parser.add_argument("--local_rank", type=int)
 
 parser.add_argument("--madx_lang_adapter", default=None)
-parser.add_argument("--no_task_adapter", default=False, action="store_true")
-# parser.add_argument("--adapter_lang_name", required=True)
+parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 
 # mapping of tasks to model/trainer classes
-model_class_mapping = {XNLI: AutoModelForSequenceClassification, XLSUM: AutoModelWithLMHead}
-trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer}
-trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer}
-trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments}
-
+model_class_mapping = {
+    XNLI: AutoModelForSequenceClassification, 
+    XLSUM: AutoModelWithLMHead,
+    WIKIANN: AutoModelForTokenClassification
+}
+trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer, WIKIANN: Trainer}
+trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer, WIKIANN: AdapterTrainer}
+trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments, WIKIANN: TrainingArguments}
 
 args = parser.parse_args()
 
 #### Process args
-if args.do_eval_after_train:
-    args.do_predict = True
+if not args.cross_lingual and not args.train_lang:
+    args.train_lang = args.lang
+# ensure that only when cross_lingual, train_lang is not the same as lang
+assert not ((args.train_lang != args.lang) ^ args.cross_lingual)
 
-if not args.madx_lang_adapter and args.no_task_adapter:
+if args.baseline:
     logger.warning("❗️ No 'madx_lang_adapter' loaded. This should be the baseline performance.")
+    assert not args.madx_lang_adapter
 
 # additional args to pass to the model init. task-dependent
 optional_model_kwargs = {}
@@ -87,6 +93,8 @@ optional_trainer_args = {}
 optional_eval_args = {}
 if args.dataset == XNLI:
     optional_model_kwargs = {"num_labels": 3}
+elif args.dataset == WIKIANN:
+    optional_model_kwargs = {"num_labels": 7}
 elif args.dataset == XLSUM:
     optional_trainer_args = {"generation_max_length": 512 + 64, 
                              "predict_with_generate":True,
@@ -94,33 +102,33 @@ elif args.dataset == XLSUM:
                              "lr_scheduler_type": "linear",
                              "warmup_steps": 0}
 
-
 if args.local_rank:
     torch.cuda.set_device(args.local_rank)
 
 if args.original_model is None:
-    # here: because the wpe is not saved, adapted_model is the original bigsciece model
-    args.original_model = args.adapted_model
+    # here: because the wpe is not saved, adapted_model_dir is the original bigsciece model
+    args.original_model = args.adapted_model_dir
 
 print("Arguments: ========")
 print(args)
-
 
 # load appropriate dataset
 logger.info("Loading dataset...")
 
 # will need to rename splits if the dataset has different name for validation set
 if args.cross_lingual:
-    logger.info("0️⃣ Cross Lingual setting")
+    logger.info(f"0️⃣ Cross Lingual setting")
+    logger.info(f"train lang: {args.train_lang}; inference lang: {args.lang}")
     # cross lingual: use english as train and validation set
-    en_dataset = load_dataset(args.dataset, "english" if args.dataset == XLSUM else "en", cache_dir=args.cache_dir)
+    en_dataset = load_dataset(args.dataset, args.train_lang, cache_dir=args.cache_dir)
     dataset = load_dataset(args.dataset, args.lang, cache_dir=args.cache_dir)
 
     train_dataset = en_dataset["train"]
     val_dataset = en_dataset["validation"]
     test_dataset = dataset["test"]
 else:
-    logger.info("👀 Supervised training setting")
+    logger.info(f"👀 Supervised training setting")
+    logger.info(f"language: {args.lang})")
     dataset = load_dataset(args.dataset, args.lang, cache_dir=args.cache_dir)
 
     train_dataset = dataset["train"]
@@ -128,13 +136,19 @@ else:
     test_dataset = dataset["test"]
 
 if args.use_partial_data:
-    logger.warning("🚨 Loading partial data!")
     train_dataset = train_dataset.shuffle(seed=args.seed).select(range(args.use_partial_train_data))
     if args.use_partial_val_data != -1:
         val_dataset = val_dataset.shuffle(seed=args.seed).select(range(args.use_partial_val_data))
     if args.use_partial_test_data != -1:
-        test_dataset = val_dataset.shuffle(seed=args.seed).select(range(args.use_partial_test_data))
+        test_dataset = test_dataset.shuffle(seed=args.seed).select(range(args.use_partial_test_data))
+    logger.warning("🚨 Loading partial data!")
 
+if args.do_train:
+    logger.info(f"train = {len(train_dataset)} samples")
+else:
+    logger.info(f"args.do_train = False")
+logger.info(f"val = {len(val_dataset)} samples")
+logger.info(f"test = {len(test_dataset)} samples")
 
 # load tokenizer
 logger.info("Loading tokenizer...")
@@ -182,6 +196,28 @@ elif args.dataset == XLSUM:
 
         return inputs
 
+elif args.dataset == WIKIANN:
+    def tokenize_function(examples):
+        tokenized_inputs = tokenizer(examples['tokens'], is_split_into_words=True, max_length=128, padding="max_length", truncation=True)
+
+        word_ids = tokenized_inputs.word_ids()  # Map tokens to their respective word.
+        previous_word_idx = None
+        label_ids = []
+        for word_idx in word_ids:  # Set the special tokens to -100.
+            if word_idx is None:
+                label_ids.append(-100)
+            elif word_idx != previous_word_idx:  # Only label the first token of a given word.
+                label_ids.append(examples[f"ner_tags"][word_idx])
+            else:
+                label_ids.append(-100)
+            previous_word_idx = word_idx
+
+        tokenized_inputs["labels"] = label_ids
+        return tokenized_inputs
+
+    def en_tokenize_function(examples):
+        return en_tokenizer(examples['tokens'], is_split_into_words=True, max_length=128, padding="max_length", truncation=True)
+
 
 # tokenizing the dataset
 logger.info("Tokenizing the dataset...")
@@ -193,7 +229,7 @@ if args.do_train:
         train_dataset = train_dataset.map(tokenize_function, batched=False)
         val_dataset = val_dataset.map(tokenize_function, batched=False)
 
-    logger.info("Print tokenized dataset example ...")
+    logger.info("Print one tokenized dataset example ...")
     logger.info(train_dataset[0])
 
 test_dataset = test_dataset.map(tokenize_function, batched=False)
@@ -209,6 +245,28 @@ if args.dataset == XNLI:
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
         return metric.compute(predictions=predictions, references=labels)
+
+elif args.dataset == WIKIANN:
+    metric = load_metric("seqeval")
+    idx2labelname = {i: label for i, label in enumerate(dataset["train"].features[f"ner_tags"].feature.names)}
+
+    def compute_metrics(eval_pred):
+        logits, golds = eval_pred
+        predictions = np.argmax(logits, axis=-1)
+
+        converted_golds = list()
+        converted_preds = list()
+
+        for i in range(golds.shape[0]):
+            gold, pred = list(), list()
+            for j in range(golds.shape[1]):
+                if golds[i][j] != -100:
+                    gold.append(idx2labelname[golds[i][j]])
+                    pred.append(idx2labelname[predictions[i][j]])
+            converted_golds.append(gold)
+            converted_preds.append(pred)
+
+        return metric.compute(predictions=converted_preds, references=converted_golds)
 
 elif args.dataset == XLSUM:
     metric = load_metric('rouge')
@@ -298,93 +356,80 @@ training_args = trainer_args_mapping[args.dataset](
     **optional_trainer_args,
 )
 
+def print_model_trainable_layers(model):
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            print(f"🥶 Frozen layer '{name}'")
+        else:
+            print(f"🚀 Trainable layer '{name}'")
+
 def load_model(args, inference=False):
-    # load model
-    pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id
-    model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
-                                                            pad_token_id=pad_token_id,
-                                                            cache_dir=args.cache_dir,
-                                                            revision=args.revision,
-                                                            **optional_model_kwargs)
+    def load_task_specific_adapters(args, model, inference=False):
+        if not inference:
+            model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
+            model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
+            return model
+        else:
+            adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
+            model.set_active_adapters(adapter_name)
+            return model
 
-    if args.no_task_adapter:
-        for name, param in model.named_parameters():
-            param.requires_grad = False
-            if not inference and "word_embeddings" in name:
-                param.requires_grad = True
+    def load_embedding_layers(args, tokenizer, model):
+        ###### legacy code
+        # # use original causal LM model to load the embedding layers
+        # causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
+        # causal_lm_model.resize_token_embeddings(len(tokenizer))
+        # if not args.original_model == args.adapted_model_dir:
+        #     causal_lm_model.transformer.wte = wte
+        #     causal_lm_model.transformer.wpe = wpe
 
-            # print out for debugging
-            if not param.requires_grad:
-                print(f"Frozen layer '{name}'")
-            else:
-                print(f"Trainable layer '{name}'")
+        if "tr5b-1B3" in args.original_model: # previous 1.3B bigsience model
+            token_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wte.pt')
+            add_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wpe.pt')
+            model.transformer.wte = token_embedding
+            model.transformer.wpe = add_embedding
+        
+        elif "bloom" in args.original_model:
+            token_embedding = torch.load(f'{args.adapted_model_dir}/word_embeddings.pt')
+            add_embedding = torch.load(f'{args.adapted_model_dir}/word_embeddings_layernorm.pt')
+            model.transformer.word_embeddings = token_embedding
+            model.transformer.word_embeddings_layernorm = add_embedding
+
+        return model
+    
+    def load_language_adapters(args, model):
+        adapter_name = model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")
+        model.set_active_adapters(adapter_name)
         return model
 
+    pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id
+    model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
+                                                              pad_token_id=pad_token_id,
+                                                              cache_dir=args.cache_dir,
+                                                              revision=args.revision,
+                                                              **optional_model_kwargs)
 
-    # obtain the embeddings for training (supervised setting) and inference
-    if "tr5b-1B3" in args.original_model: # previous 1.3B bigsience model
-        token_embedding = torch.load(f'{args.adapted_model}/embedding_wte.pt')
-        add_embedding = torch.load(f'{args.adapted_model}/embedding_wpe.pt')
-    elif "bloom" in args.original_model:
-        token_embedding = torch.load(f'{args.adapted_model}/word_embeddings.pt')
-        add_embedding = torch.load(f'{args.adapted_model}/word_embeddings_layernorm.pt')
+    # baseline: only need to add task-specific adapters 
+    # (keeps separated for now for easier debugging)
+    if args.baseline:
+        model = load_task_specific_adapters(args, model, inference)
+        return model
 
-    # load embedding layers
+    # adapted models
     if not args.cross_lingual or inference:
-        print(model.transformer.wte.weight)
-        model.transformer.wte = wte
-        print(model.transformer.wte.weight)
-        assert False
-        # need to load embedding/adapters from the model adapted to the new language
-        causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
-        causal_lm_model.resize_token_embeddings(len(tokenizer))
-        if not args.original_model == args.adapted_model:
-            causal_lm_model.transformer.wte = wte
-            causal_lm_model.transformer.wpe = wpe
+        model = load_embedding_layers(args, tokenizer, model)
         if args.madx_lang_adapter:
-            adapter_name = causal_lm_model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")                                    
-            model.transformer = causal_lm_model.transformer
-            model.set_active_adapters(adapter_name)
-
-    if not inference:
-        #if not args.cross_lingual: normally need to add adapter in any case
-            # normally this is already done, why use adapter_lang_name here?
-            #if args.madx_lang_adapter:
-            #    adapter_name = model.load_adapter(args.madx_lang_adapter,
-            #                                    config="pfeiffer+inv",
-            #                                    load_as=args.adapter_lang_name)
-        model.add_adapter(f"{args.dataset}-task-adapter")
-        model.train_adapter(f"{args.dataset}-task-adapter")
-
-
-        print("🔥 ==================== Training: ==================== 🔥")
-        for name, param in model.named_parameters():
-            if not param.requires_grad:
-                print(f"🥶 Frozen layer '{name}'")
-            else:
-                print(f"🚀 Trainable layer '{name}'")
-        print(model)
-    else:
-        #if args.madx_lang_adapter:
-        assert args.pretrained_adapters_dir 
-            # normally this is done in any case
-            #adapter_name = model.load_adapter(args.madx_lang_adapter)
-            #model.set_active_adapters(adapter_name)
-        adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset}-task-adapter")
-        model.set_active_adapters(adapter_name)
-        #else:
-        #        # adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/013/xnli_de_de_100K_adpt_16_0shot/checkpoint-24544/xnli-task-adapter")
-        #        # not sure what happens here
-        #        # for TGT -> TGT supervised finetuning setting, change adapter_name
-        #        adapter_name = model.load_adapter("/users/zyong2/data/zyong2/bigscience/data/processed/exp-013/task_xnli_de_ft_100000_ori/checkpoint-24544/xnli-task-adapter")
-        #        model.set_active_adapters(adapter_name)
-        print(model)
+            model = load_language_adapters(args, model)
+    
+    model = load_task_specific_adapters(args, model, inference)
     return model
 
 
 if args.do_train:
     logger.info("Starting training...")
     model = load_model(args)
+    print("🔥 ==================== Training: ==================== 🔥")
+    print_model_trainable_layers(model)
 
     # only use seq2seq collator if doing seq2seq task
     if args.dataset == XLSUM:
@@ -394,31 +439,18 @@ if args.do_train:
             label_pad_token_id=-100,
         )
     
-    if args.no_task_adapter:
-        logger.info(f"Using {trainer_no_task_adpt_class_mapping[args.dataset]} for training")
-        trainer = trainer_no_task_adpt_class_mapping[args.dataset](
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            compute_metrics=compute_metrics,
-            # args for xlsum only
-            **{"data_collator": data_collator} if args.dataset == XLSUM else {},
-        )
-    else:
-        logger.info(f"Using {trainer_class_mapping[args.dataset]} for training")
-        trainer = trainer_class_mapping[args.dataset](
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            compute_metrics=compute_metrics,
-            # args for xlsum only
-            **{"data_collator": data_collator} if args.dataset == XLSUM else {},
-        )
+    logger.info(f"Using {trainer_class_mapping[args.dataset]} for training")
+    trainer = trainer_class_mapping[args.dataset](
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        compute_metrics=compute_metrics,
+        # args for xlsum only
+        **{"data_collator": data_collator} if args.dataset == XLSUM else {},
+    )
 
     trainer.train()
-
 
 
 if args.do_predict:
@@ -428,13 +460,14 @@ if args.do_predict:
         if checkpoint_dir.startswith("checkpoint-")],
         key=lambda x: int(x[len('checkpoint-'):])))
     assert len(evaluation_dirs) > 0
-    logger.info(f"Found {len(evaluation_dirs)} checkpoints")
+    print(f"Found {len(evaluation_dirs)} checkpoints")
 
     # load the last checkpoint. 
     args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
-    logger.info(f"[Evaluation] Loading trained model from {evaluation_dirs[-1]}")
+    print(f"[Evaluation] Loading trained model from {args.pretrained_adapters_dir}")
         
     model = load_model(args, inference=True)
+    model.eval()
     training_args.report_to = list()
 
     if args.dataset == XLSUM:
@@ -449,26 +482,16 @@ if args.do_predict:
             pad_to_multiple_of=8 if training_args.fp16 else None,
         )
 
-    if args.no_task_adapter:
-        logger.info(f"Using {trainer_no_task_adpt_class_mapping[args.dataset]} for training")
-        trainer = trainer_no_task_adpt_class_mapping[args.dataset](
-            model=model,
-            args=training_args,
-            eval_dataset=test_dataset,
-            compute_metrics=compute_metrics,
-            # args for xlsum only
-            **{"data_collator": data_collator} if args.dataset == XLSUM else {}
-            )
-    else:
-        trainer = trainer_class_mapping[args.dataset](
-            model=model,
-            args=training_args,
-            eval_dataset=test_dataset,
-            compute_metrics=compute_metrics,
-            # args for xlsum only
-            **{"data_collator": data_collator} if args.dataset == XLSUM else {}
+    eval_trainer = trainer_class_mapping[args.dataset](
+        model=model,
+        args=training_args,
+        eval_dataset=test_dataset,
+        compute_metrics=compute_metrics,
+        # args for xlsum only
+        **{"data_collator": data_collator} if args.dataset == XLSUM else {}
 
-        )
+    )
 
-    print("Evaluating on test set...", trainer.evaluate())
+    print("Evaluating on test set...")
+    print(eval_trainer.evaluate())
 

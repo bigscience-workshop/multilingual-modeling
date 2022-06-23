@@ -533,6 +533,18 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
         model.tie_weights()
+
+    elif model_args.embedding_strategies == "extend":
+        original_embedding_layer = model.get_input_embeddings()
+        original_vocab_size = original_embedding_layer.weight.shape[0]
+        model.resize_token_embeddings(len(tokenizer))
+
+        embedding_layer = model.get_input_embeddings()
+        gradient_mask = torch.zeros(*embedding_layer.weight.shape)
+        gradient_mask[original_vocab_size:, :] = 1.0  # only finetune extended vocab
+        gradient_mask = gradient_mask.to(model.device)
+        embedding_layer.weight.register_hook(lambda grad: grad.mul_(gradient_mask))
+
     #if model_args.embedding_strategies == "overlap-replace":
     #    if not tokenizer.name_or_path == model_args.model_name_or_path:
     #        orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
@@ -654,6 +666,8 @@ def main():
 
     print("Model: 👇")
     print(model)
+
+    # print(model.get_input_embeddings().weight) # get original weight for embedding layer
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -688,6 +702,9 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+    
+    # print(model.get_input_embeddings().weight) # get updated weight
+
 
     # Evaluation
     if training_args.do_eval:

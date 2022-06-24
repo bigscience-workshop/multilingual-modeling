@@ -538,12 +538,15 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         original_embedding_layer = model.get_input_embeddings()
         original_vocab_size = original_embedding_layer.weight.shape[0]
         model.resize_token_embeddings(len(tokenizer))
-
+        model.tie_weights()
+        
         embedding_layer = model.get_input_embeddings()
-        gradient_mask = torch.zeros(*embedding_layer.weight.shape)
-        gradient_mask[original_vocab_size:, :] = 1.0  # only finetune extended vocab
-        gradient_mask = gradient_mask.to(model.device)
-        embedding_layer.weight.register_hook(lambda grad: grad.mul_(gradient_mask))
+        # erases gradients for the original embedding layer, without using extra CUDA memory
+        def zero_grad(grad):
+            grad[:original_vocab_size, :] = 0
+            return grad
+
+        embedding_layer.weight.register_hook(lambda grad: zero_grad(grad))
 
     #if model_args.embedding_strategies == "overlap-replace":
     #    if not tokenizer.name_or_path == model_args.model_name_or_path:
@@ -667,7 +670,9 @@ def main():
     print("Model: 👇")
     print(model)
 
-    # print(model.get_input_embeddings().weight) # get original weight for embedding layer
+    
+    # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
+    # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -703,7 +708,16 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
     
-    # print(model.get_input_embeddings().weight) # get updated weight
+    # uncomment to test whether extending vocab gradient masking is working correctly. 
+    # if model_args.embedding_strategies == "extend":
+    #     print("Unsliced, post-training:", model.get_input_embeddings().weight) # get updated weight
+    #     if not torch.equal(orig_embeddings[:250880, :], model.get_input_embeddings().weight[:250880, :]):
+    #         raise ValueError("embedding layer is updated where it shouldn't....")
+
+    #     if torch.equal(orig_embeddings[250880:, :], model.get_input_embeddings().weight[250880:, :]):
+    #         print("original embeddings:", orig_embeddings[250880:, :])
+    #         print("updated embeddings:", model.get_input_embeddings().weight[250880:, :])
+    #         raise ValueError("embedding layer is not updated where it should....")
 
 
     # Evaluation

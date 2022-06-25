@@ -547,6 +547,16 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #elif model_args.embedding_strategies == "replace":
     #    model.resize_token_embeddings(len(tokenizer))
 
+    print(f"✅ Use Finetuning Strategy: {model_args.finetuning_strategies}")
+
+    if model_args.finetuning_strategies == "full":
+        # No modification needed
+        pass
+    elif model_args.finetuning_strategies == "bitfit":
+        for name, param in model.base_model.named_parameters():
+            if 'bias' not in name:
+                param.requires_grad = False
+
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
@@ -568,6 +578,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.

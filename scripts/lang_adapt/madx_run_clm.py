@@ -111,6 +111,10 @@ class ModelArguments:
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
     )
+    finetuning_strategies: str = field(
+        default="full",
+        metadata={"help": "choose one of the three strategies - 'full', 'bitfit'"},
+    )
     adapter_placement: str = field(
         default="all", 
         metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},

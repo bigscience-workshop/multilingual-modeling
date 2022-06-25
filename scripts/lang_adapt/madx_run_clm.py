@@ -549,13 +549,13 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
     print(f"✅ Use Finetuning Strategy: {model_args.finetuning_strategies}")
 
-    if model_args.finetuning_strategies == "full":
-        # No modification needed
-        pass
-    elif model_args.finetuning_strategies == "bitfit":
+    if model_args.finetuning_strategies == "bitfit":
         for name, param in model.base_model.named_parameters():
             if 'bias' not in name:
                 param.requires_grad = False
+    elif model_args.finetuning_strategies == "full":
+        # No modification needed
+        pass
 
     trainable_params = 0
     frozen_params = 0

@@ -520,18 +520,36 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     if model_args.embedding_strategies == "overlap-replace":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+        else:
+            raise Exception("Same tokenizer so overlap-replace doesn't make sense.")
+        
+        if hasattr(model.transformer, "wte"):
+            # gpt-2
+            ref_embedding = model.transformer.wte
+        elif hasattr(model.transformer, "word_embeddings"):
+            # bloom
+            ref_embedding = model.transformer.word_embeddings
+        else:
+            raise Exception("Unsupported Model")
 
-        ref_embedding = model.transformer.wte
         model.resize_token_embeddings(len(tokenizer))
         overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
+        print(len(tokenizer))
+        print(f"{len(overlap)} tokens overlapped")
         curr_vocab = tokenizer.vocab
         orig_vocab = orig_tokenizer.vocab
         for t in overlap:
-            model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            if hasattr(model.transformer, "wte"):
+                model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            elif hasattr(model.transformer, "word_embeddings"):
+                model.transformer.word_embeddings.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            else:
+                raise Exception("Unsupported Model")
         model.tie_weights()
 
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
+        print(len(tokenizer))
         model.tie_weights()
     #if model_args.embedding_strategies == "overlap-replace":
     #    if not tokenizer.name_or_path == model_args.model_name_or_path:

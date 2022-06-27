@@ -524,19 +524,52 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     if model_args.embedding_strategies == "overlap-replace":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+        else:
+            raise Exception("Same tokenizer so overlap-replace doesn't make sense.")
+        
+        if hasattr(model.transformer, "wte"):
+            # gpt-2
+            ref_embedding = model.transformer.wte
+        elif hasattr(model.transformer, "word_embeddings"):
+            # bloom
+            ref_embedding = model.transformer.word_embeddings
+        else:
+            raise Exception("Unsupported Model")
 
-        ref_embedding = model.transformer.wte
         model.resize_token_embeddings(len(tokenizer))
         overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
+        print(len(tokenizer))
+        print(f"{len(overlap)} tokens overlapped")
         curr_vocab = tokenizer.vocab
         orig_vocab = orig_tokenizer.vocab
         for t in overlap:
-            model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            if hasattr(model.transformer, "wte"):
+                model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            elif hasattr(model.transformer, "word_embeddings"):
+                model.transformer.word_embeddings.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            else:
+                raise Exception("Unsupported Model")
         model.tie_weights()
 
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
+        print(len(tokenizer))
         model.tie_weights()
+
+    elif model_args.embedding_strategies == "extend":
+        original_embedding_layer = model.get_input_embeddings()
+        original_vocab_size = original_embedding_layer.weight.shape[0]
+        model.resize_token_embeddings(len(tokenizer))
+        model.tie_weights()
+        
+        embedding_layer = model.get_input_embeddings()
+        # erases gradients for the original embedding layer, without using extra CUDA memory
+        def zero_grad(grad):
+            grad[:original_vocab_size, :] = 0
+            return grad
+
+        embedding_layer.weight.register_hook(lambda grad: zero_grad(grad))
+
     #if model_args.embedding_strategies == "overlap-replace":
     #    if not tokenizer.name_or_path == model_args.model_name_or_path:
     #        orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
@@ -669,6 +702,10 @@ def main():
 
     print("Model: 👇")
     print(model)
+
+    
+    # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
+    # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -703,6 +740,18 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+    
+    # uncomment to test whether extending vocab gradient masking is working correctly. 
+    # if model_args.embedding_strategies == "extend":
+    #     print("Unsliced, post-training:", model.get_input_embeddings().weight) # get updated weight
+    #     if not torch.equal(orig_embeddings[:250880, :], model.get_input_embeddings().weight[:250880, :]):
+    #         raise ValueError("embedding layer is updated where it shouldn't....")
+
+    #     if torch.equal(orig_embeddings[250880:, :], model.get_input_embeddings().weight[250880:, :]):
+    #         print("original embeddings:", orig_embeddings[250880:, :])
+    #         print("updated embeddings:", model.get_input_embeddings().weight[250880:, :])
+    #         raise ValueError("embedding layer is not updated where it should....")
+
 
     # Evaluation
     if training_args.do_eval:

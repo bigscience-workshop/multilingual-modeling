@@ -65,6 +65,10 @@ parser.add_argument("--madx_lang_adapter", default=None)
 parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 
+task_layers = ["task-adapters", "last-layer"]
+parser.add_argument("--task_layers", choices=task_layers, required=True)
+
+
 # mapping of tasks to model/trainer classes
 model_class_mapping = {
     XNLI: AutoModelForSequenceClassification, 
@@ -327,7 +331,6 @@ elif args.dataset == XLSUM:
         # labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
         
         # result = metric.compute(predictions=preds, references=labels)
-        assert False
 
 else:
     raise ValueError("Unknown dataset provided")
@@ -364,6 +367,15 @@ def print_model_trainable_layers(model):
             print(f"🚀 Trainable layer '{name}'")
 
 def load_model(args, inference=False):
+    def make_last_layer_trainable(args, model, inference=False):
+        for name, param in model.named_parameters():
+            # task-specific last layer
+            if 'transformer' not in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        return model
+
     def load_task_specific_adapters(args, model, inference=False):
         if not inference:
             model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
@@ -412,7 +424,10 @@ def load_model(args, inference=False):
     # baseline: only need to add task-specific adapters 
     # (keeps separated for now for easier debugging)
     if args.baseline:
-        model = load_task_specific_adapters(args, model, inference)
+        if args.task_layers == "task-adapters":
+            model = load_task_specific_adapters(args, model, inference)
+        elif args.task_layers == "last-layer":
+            model = make_last_layer_trainable(args, model, inference)
         return model
 
     # adapted models
@@ -421,7 +436,12 @@ def load_model(args, inference=False):
         if args.madx_lang_adapter:
             model = load_language_adapters(args, model)
     
-    model = load_task_specific_adapters(args, model, inference)
+    if args.task_layers == "task-adapters":
+        model = load_task_specific_adapters(args, model, inference)
+    elif args.task_layers == "last-layer":
+        model = make_last_layer_trainable(args, model, inference)
+    print_model_trainable_layers(model)
+    assert False
     return model
 
 

@@ -1,7 +1,11 @@
 """
 Source: https://github.com/Adapter-Hub/adapter-transformers/blob/master/examples/language-modeling/run_clm.py
 """
-
+#TODO: hailey composable sft impl. (this comment shouldn't make it into main!)
+    # use the LT Trainer class from composable-sft
+    # see how this interacts with adapters
+    # see how this interacts with the embeddings being trained
+    # todo: computations for changing 
 import logging
 import math
 import os
@@ -41,6 +45,13 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from sft import (
+    LotteryTicketSparseFineTuner,
+    SFT,
+)
+
+from efficient_ft.composable_sft import SftArguments 
+
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0")
@@ -52,6 +63,8 @@ logger = logging.getLogger(__name__)
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+trainer_class_mapping = {'emb': Trainer, 'emb-and-adpt': AdapterTrainer, 'emb-then-adpt': AdapterTrainer, 'emb-and-sft': LotteryTicketSparseFineTuner}
 
 
 @dataclass
@@ -105,7 +118,7 @@ class ModelArguments:
     )
     lang_adapt_strategies: str = field(
         default="",
-        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
+        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt', 'emb-and-sft'"},
     )
     embedding_strategies: str = field(
         default="",
@@ -432,7 +445,7 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
             logger.info(f"✅ saved lm_data to {saved_lm_datasets_fp}")
     return lm_datasets
 
-def modify_model(adapter_args, data_args, model_args, tokenizer, model):
+def modify_model(adapter_args, sft_args, data_args, model_args, tokenizer, model):
     #if "emb" in model_args.lang_adapt_strategies:
     #    if "replace" in model_args.embedding_strategies:
     #        for name, param in model.named_parameters():
@@ -448,10 +461,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
                                                     leave_out = [i for i in range(0,24) if not i in adapters2use]
                 )
-
-
         else:
-
             if model_args.adapter_placement == "all":
                 adapter_config = AdapterConfig.load(
                     adapter_args.adapter_config,
@@ -513,7 +523,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             raise ValueError(
                 "Adapters can only be loaded in adapters training mode."
                 "Use --train_adapter to enable adapter training"
-            )
+            ) 
 
     print(f"✅ Use Embedding Strategy: {model_args.embedding_strategies}")
 
@@ -575,47 +585,82 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #    model.tie_weights()
     #elif model_args.embedding_strategies == "replace":
     #    model.resize_token_embeddings(len(tokenizer))
+    
+    if sft_args.train_sft: # Hailey: might need to put some more args here.
+        lm_head = model.lm_head
+
+        if sft_args.freeze_head:
+            for param in lm_head.parameters():
+                param.requires_grad = False
+        # if sft_args.load_sft:
+            # model.load_sft(sft_args.load_sft)
+        if sft_args.freeze_layer_norm:
+            for name, param in model.named_parameters():
+                if "layer_norm" in name or "ln_f" in name:
+                    param.requires_grad = False
+                
+
 
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
-    for name, param in model.named_parameters():
-        if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
-            param.requires_grad = True
-            emb_params += param.numel()
-        elif model_args.lang_adapt_strategies == "emb":
-            param.requires_grad = False
+    if adapter_args.train_adapter:
+        for name, param in model.named_parameters():
+            if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
+                param.requires_grad = True
+                emb_params += param.numel()
+            elif model_args.lang_adapt_strategies == "emb":
+                param.requires_grad = False
 
-        if not param.requires_grad:
-            print(f"🥶 Frozen layer '{name}'")
-            frozen_params += param.numel()
-        else:
-            print(f"🚀 Trainable layer '{name}'")
-            trainable_params += param.numel()
+            if not param.requires_grad:
+                print(f"🥶 Frozen layer '{name}'")
+                frozen_params += param.numel()
+            else:
+                print(f"🚀 Trainable layer '{name}'")
+                trainable_params += param.numel()
+    elif sft_args.train_sft:
+        for name, param in model.named_parameters():
+            if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
+                param.requires_grad = True
+                emb_params += param.numel()
+            elif model_args.lang_adapt_strategies == "emb":
+                param.requires_grad = True
+
+            if not param.requires_grad:
+                print(f"🥶 Frozen layer '{name}'")
+                frozen_params += param.numel()
+            elif "word_embeddings" in name or "wte" in name or "wpe" in name and param.requires_grad:
+                print(f"🚀 Trainable layer '{name}'")
+                trainable_params += param.numel()
+            else:
+                print(f"🚀 Sparsely Trainable layer '{name}'")
+                trainable_params += param.numel()
          
 
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, MultiLingAdapterArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, MultiLingAdapterArguments, SftArguments))
 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args, adapter_args = parser.parse_json_file(
+        model_args, data_args, training_args, adapter_args, sft_args = parser.parse_json_file(
             json_file=os.path.abspath(sys.argv[1])
         )
     else:
-        model_args, data_args, training_args, adapter_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args, adapter_args, sft_args = parser.parse_args_into_dataclasses()
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt')
+    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'emb-and-sft')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging
@@ -663,7 +708,7 @@ def main():
 
     tokenizer = load_tokenizer(model_args)
     model = load_model(model_args, tokenizer)
-    modify_model(adapter_args, data_args, model_args, tokenizer, model)
+    modify_model(adapter_args, sft_args, data_args, model_args, tokenizer, model)
     
     # Preprocessing the datasets.
     lm_datasets = get_lm_dataset(training_args, data_args, model_args, tokenizer)
@@ -673,11 +718,20 @@ def main():
     if training_args.do_eval:
         eval_dataset = lm_datasets["validation"]
     
+    # only needed for composable sft
+    maskable_params = [
+        n for n, p in model.named_parameters()
+        if n.startswith(model.base_model_prefix) and p.requires_grad and not
+        ("wte" in n or "wpe" in n or "word_embedding" in n or "lm_head" in n or "ln_f")
+    ]
+
     # Initialize our Trainer
-    trainer_class = AdapterTrainer if adapter_args.train_adapter else Trainer
+    trainer_class = trainer_class_mapping[model_args.lang_adapt_strategies]
     trainer = trainer_class(
         model=model,
         args=training_args,
+        **{'sft_args': sft_args} if 'sft' in model_args.lang_adapt_strategies else {},
+        **{'maskable_params': maskable_params} if 'sft' in model_args.lang_adapt_strategies else {},
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
@@ -690,7 +744,7 @@ def main():
 
     
     # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
-    # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
+    orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -725,17 +779,20 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
-    
-    # uncomment to test whether extending vocab gradient masking is working correctly. 
-    # if model_args.embedding_strategies == "extend":
-    #     print("Unsliced, post-training:", model.get_input_embeddings().weight) # get updated weight
-    #     if not torch.equal(orig_embeddings[:250880, :], model.get_input_embeddings().weight[:250880, :]):
-    #         raise ValueError("embedding layer is updated where it shouldn't....")
 
-    #     if torch.equal(orig_embeddings[250880:, :], model.get_input_embeddings().weight[250880:, :]):
-    #         print("original embeddings:", orig_embeddings[250880:, :])
-    #         print("updated embeddings:", model.get_input_embeddings().weight[250880:, :])
-    #         raise ValueError("embedding layer is not updated where it should....")
+        if 'sft' in model_args.lang_adapt_strategies:
+            trainer.sft().save(f'{training_args.output_dir}/')
+
+    # uncomment to test whether extending vocab gradient masking is working correctly. 
+    if model_args.embedding_strategies == "extend":
+        print("Unsliced, post-training:", model.get_input_embeddings().weight) # get updated weight
+        if not torch.equal(orig_embeddings[:250880, :], model.get_input_embeddings().weight[:250880, :]):
+            raise ValueError("embedding layer is updated where it shouldn't....")
+
+        if torch.equal(orig_embeddings[250880:, :], model.get_input_embeddings().weight[250880:, :]):
+            print("original embeddings:", orig_embeddings[250880:, :])
+            print("updated embeddings:", model.get_input_embeddings().weight[250880:, :])
+            raise ValueError("embedding layer is not updated where it should....")
 
 
     # Evaluation

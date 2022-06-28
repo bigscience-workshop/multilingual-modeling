@@ -152,11 +152,11 @@ logger.info(f"test = {len(test_dataset)} samples")
 
 # load tokenizer
 logger.info("Loading tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision)
+tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 tokenizer.pad_token = tokenizer.eos_token
 
 # TODO: we probably need better code for this than multiple if-else statements
-en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision)
+en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 en_tokenizer.pad_token = en_tokenizer.eos_token
 
 if args.dataset == XNLI:

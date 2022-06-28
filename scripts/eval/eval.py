@@ -440,8 +440,6 @@ def load_model(args, inference=False):
         model = load_task_specific_adapters(args, model, inference)
     elif args.task_layers == "last-layer":
         model = make_last_layer_trainable(args, model, inference)
-    print_model_trainable_layers(model)
-    assert False
     return model
 
 

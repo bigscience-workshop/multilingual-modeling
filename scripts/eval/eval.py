@@ -157,13 +157,21 @@ logger.info(f"test = {len(test_dataset)} samples")
 # load tokenizer
 logger.info("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
-tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
 
 # TODO: we probably need better code for this than multiple if-else statements
 en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
-en_tokenizer.pad_token = en_tokenizer.eos_token
+if en_tokenizer.pad_token is None:
+    en_tokenizer.pad_token = en_tokenizer.eos_token
 
 if args.dataset == XNLI:
+    if tokenizer.eos_token is None:
+        tokenizer.eos_token = tokenizer.sep_token
+    if en_tokenizer.eos_token is None:
+        en_tokenizer.eos_token = en_tokenizer.sep_token
+
     def tokenize_function(examples):
         return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
 
@@ -368,12 +376,7 @@ def print_model_trainable_layers(model):
 
 def load_model(args, inference=False):
     def make_last_layer_trainable(args, model, inference=False):
-        for name, param in model.named_parameters():
-            # task-specific last layer
-            if 'transformer' not in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+        model.freeze_model(freeze=True)
         return model
 
     def load_task_specific_adapters(args, model, inference=False):
@@ -457,8 +460,14 @@ if args.do_train:
             label_pad_token_id=-100,
         )
     
+    if model.active_adapters is None:
+        logger.info("No active adapters")
+        trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
+    else:
+        trainer_class = trainer_class_mapping[args.dataset]
     logger.info(f"Using {trainer_class_mapping[args.dataset]} for training")
-    trainer = trainer_class_mapping[args.dataset](
+    
+    trainer = trainer_class(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -500,7 +509,13 @@ if args.do_predict:
             pad_to_multiple_of=8 if training_args.fp16 else None,
         )
 
-    eval_trainer = trainer_class_mapping[args.dataset](
+    if model.active_adapters is None:
+        logger.info("No active adapters")
+        trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
+    else:
+        trainer_class = trainer_class_mapping[args.dataset]
+
+    eval_trainer = trainer_class(
         model=model,
         args=training_args,
         eval_dataset=test_dataset,

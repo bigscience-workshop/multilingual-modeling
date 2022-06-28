@@ -320,9 +320,9 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
         # cache tokenized data
         base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
 
-        if saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
+        if not data_args.overwrite_cache and saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
             logger.info(f"✅ loaded tokenized_data from {saved_tokenized_datasets_fp}")
         else:
@@ -414,9 +414,9 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
 
     with training_args.main_process_first(desc="grouping texts together"):
         base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
 
-        if saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
+        if not data_args.overwrite_cache and saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
             logger.info(f"✅ loaded lm_data from {saved_lm_datasets_fp}")
         else:
@@ -534,7 +534,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
         model.resize_token_embeddings(len(tokenizer))
         overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
-        print(len(tokenizer))
         print(f"{len(overlap)} tokens overlapped")
         curr_vocab = tokenizer.vocab
         orig_vocab = orig_tokenizer.vocab
@@ -549,7 +548,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
-        print(len(tokenizer))
         model.tie_weights()
 
     elif model_args.embedding_strategies == "extend":
@@ -597,6 +595,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.

@@ -10,15 +10,15 @@ ADPT_STRATEGY="emb-and-adpt"
 EMBD_SRATEGY="extend"
 FTNE_STRATEGY="bitfit"
 
-tokenizer_dir="checkpoint/tok_bloom-350m_my_oscar_100000samples_24000vocab_extend"
+tokenizer_dir="checkpoint/tokenizer_ext_my/"
 cache_dir="checkpoint/cache/"
 output_dir="checkpoint/${BIGS_MODEL##*/}_${LANG}_${ADPT_STRATEGY}_${EMBD_SRATEGY}_${FTNE_STRATEGY}_${DATA_SAMPLES}samples"
-logging_dir="checkpoint/${BIGS_MODEL##*/}_${LANG}_${ADPT_STRATEGY}_${EMBD_SRATEGY}_${FTNE_STRATEGY}_${DATA_SAMPLES}samples"
+logging_dir="logs/${BIGS_MODEL##*/}_${LANG}_${ADPT_STRATEGY}_${EMBD_SRATEGY}_${FTNE_STRATEGY}_${DATA_SAMPLES}samples"
 
 mkdir -p $output_dir
 mkdir -p $logging_dir
 
-python scripts/lang_adapt/madx_run_clm.py \
+python madx_run_clm.py \
     --seed 0 \
     --fp16 \
     --model_name_or_path $BIGS_MODEL \
@@ -27,6 +27,8 @@ python scripts/lang_adapt/madx_run_clm.py \
     --cache_dir $cache_dir \
     --dataset_config_name "unshuffled_deduplicated_${LANG}" \
     --logging_dir $logging_dir \
+    --logging_first_step True \
+    --logging_steps 8 \
     --report_to "tensorboard" \
     --learning_rate 1e-4 \
     --lr_scheduler_type "constant" \
@@ -35,8 +37,8 @@ python scripts/lang_adapt/madx_run_clm.py \
     --output_dir $output_dir \
     --preprocessing_num_workers 8 \
     --overwrite_output_dir \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 16 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
     --per_device_eval_batch_size 2 \
     --eval_accumulation_steps 1 \
     --eval_steps 1000 \
@@ -46,7 +48,7 @@ python scripts/lang_adapt/madx_run_clm.py \
     --save_strategy "epoch" \
     --save_total_limit 3 \
     --max_train_samples ${DATA_SAMPLES}\
-    --max_steps 50000 \
+    --max_steps 6250 \
     --load_best_model_at_end \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \

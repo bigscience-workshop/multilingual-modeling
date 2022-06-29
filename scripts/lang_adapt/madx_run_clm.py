@@ -39,6 +39,7 @@ from transformers import (
 )
 from transformers.adapters.configuration import AdapterConfig
 from transformers.adapters import PrefixTuningConfig
+from transformers.adapters import LoRAConfig
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -454,11 +455,12 @@ def modify_model(adapter_args, sft_args, data_args, model_args, tokenizer, model
 
     def get_adapter_config(adapter_args, model_args):
         if adapter_args.adapter_config == "prefix_tuning":
+            bottleneck = int(model.transformer.embed_dim // adapter_args.adapter_reduction_factor)
             if model_args.adapter_placement == "all":
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+                adapter_config = PrefixTuningConfig(bottleneck_size = bottleneck)
             else:
                 adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
+                adapter_config = PrefixTuningConfig(bottleneck_size = bottleneck, 
                                                     leave_out = [i for i in range(0,24) if not i in adapters2use]
                 )
         else:
@@ -718,11 +720,40 @@ def main():
     if training_args.do_eval:
         eval_dataset = lm_datasets["validation"]
     
+    # compute K value for SFT (https://arxiv.org/pdf/2110.07560.pdf)
+    if sft_args.train_sft and not adapter_args.train_adapter:
+        # override the K value if adapter_reduction_factor is set
+        if adapter_args.adapter_reduction_factor:
+            logger.info(f"Overriding K value for SFT with adapter_reduction_factor: {adapter_args.train_adapter}")
+            # calc appropriate K value
+            num_layers = len(model.transformer.h)
+            sft_k = num_layers * model.transformer.word_embeddings.weight.shape[1] ** 2 // adapter_args.adapter_reduction_factor * 2 #* 2 for the up and down proj
+
+            sft_k += model.transformer.word_embeddings.weight.shape[1]  ** 2 // 2 # inv adapters. TODO: if we use other adapter configs, this breaks (code works, but K no longer matches adapter budget)
+
+            sft_args.ft_params_num = int(sft_k)
+            logger.info(f"K value for SFT is {sft_args.ft_params_num}")
+
+    # if adapter_args.train_adapter:
+    #     trainable_params = 0
+    #     for name, param in model.named_parameters():
+    #         if "adapter" in name:
+    #             print(f"🚀 Trainable layer '{name}'")
+    #             trainable_params += param.numel()
+    #     logger.info(f"adapter elements: {trainable_params}")
+
+    #     num_layers = len(model.transformer.h)
+    #     sft_k = num_layers * model.transformer.word_embeddings.weight.shape[1] ** 2 // adapter_args.adapter_reduction_factor * 2 #* 2 for the up and down proj
+
+    #     sft_k += model.transformer.word_embeddings.weight.shape[1] ** 2 // 2 # inv adapters. TODO: if we use other adapter configs, this breaks (code works, but K no longer matches adapter budget)
+
+    #     sft_args.ft_params_num = int(sft_k)
+    #     logger.info(f"K value for SFT is {sft_args.ft_params_num}")
     # only needed for composable sft
     maskable_params = [
         n for n, p in model.named_parameters()
         if n.startswith(model.base_model_prefix) and p.requires_grad and not
-        ("wte" in n or "wpe" in n or "word_embedding" in n or "lm_head" in n or "ln_f")
+        ("wte" in n or "wpe" in n or "word_embedding" in n or "lm_head" in n)
     ]
 
     # Initialize our Trainer

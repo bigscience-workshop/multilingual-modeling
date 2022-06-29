@@ -8,8 +8,8 @@ EMB_STRATEGY="extend"
 
 tokenizer_dir=./tokenizers/tok_bloom-350m_th_oscar_10000samples_5000vocab_extend/
 cache_dir="./cache"
-output_dir="./sft_testing"
-logging_dir="./sft_testing"
+output_dir="./sft_testing_short"
+logging_dir="./sft_testing_short"
 mkdir -p $output_dir
 mkdir -p $logging_dir
 
@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=4 python madx_run_clm.py \
     --eval_steps 1000 \
     --evaluation_strategy "steps" \
     --max_eval_samples 5000 \
-    --logging_steps 100 \
+    --logging_steps 10 \
     --save_steps 5000 \
     --save_strategy "steps" \
     --max_train_samples $MAX_TRAIN_SAMPLES \
@@ -47,17 +47,10 @@ CUDA_VISIBLE_DEVICES=4 python madx_run_clm.py \
     --embedding_strategies "$EMB_STRATEGY" \
     --adapter_reduction_factor $ADPT_REDUCTION_FACTOR \
     --language $LANG \
-    --full_ft_min_steps_per_iteration 10000 \
-    --sparse_ft_min_steps_per_iteration 10000 \
-    --full_ft_max_steps_per_iteration 10000 \
-    --sparse_ft_max_steps_per_iteration 10000 \
-    --n_ft_iterations 5 \
-    # --full_ft_max_epochs_per_iteration 100 \
-    # --sparse_ft_max_epochs_per_iteration 100 \
-    
-# export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-11.1/lib64
-# export PATH=$PATH:/usr/local/cuda-11.1/bin
-# export CUDA_HOME=/usr/local/cuda-11.1
+    --full_ft_max_steps_per_iteration 200 \
+    --sparse_ft_max_steps_per_iteration 200 \
+    --n_ft_iterations 5
+
 
 
 

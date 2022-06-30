@@ -65,7 +65,7 @@ parser.add_argument("--madx_lang_adapter", default=None)
 parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 
-task_layers = ["task-adapters", "last-layer"]
+task_layers = ["task-adapters", "last-layer", "full-model"]
 parser.add_argument("--task_layers", choices=task_layers, required=True)
 
 
@@ -159,7 +159,6 @@ logger.info("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
-
 
 # TODO: we probably need better code for this than multiple if-else statements
 en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
@@ -376,10 +375,42 @@ def print_model_trainable_layers(model):
 
 def load_model(args, inference=False):
     def make_last_layer_trainable(args, model, inference=False):
+        if model is None:
+            if not inference:
+                model_path = args.original_model
+            else:
+                model_path = args.pretrained_adapters_dir
+            print(f"Loaded model from {model_path}")
+            model = model_class_mapping[args.dataset].from_pretrained(model_path, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
         model.freeze_model(freeze=True)
+        return model
+    
+    def make_base_model_trainable(args, model, inference=False):
+        if model is None:
+            if not inference:
+                model_path = args.original_model
+            else:
+                model_path = args.pretrained_adapters_dir
+            print(f"Loaded model from {model_path}")
+            model = model_class_mapping[args.dataset].from_pretrained(model_path, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
+        model.freeze_model(freeze=False)
         return model
 
     def load_task_specific_adapters(args, model, inference=False):
+        if model is None:
+            model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
         if not inference:
             model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
@@ -390,14 +421,6 @@ def load_model(args, inference=False):
             return model
 
     def load_embedding_layers(args, tokenizer, model):
-        ###### legacy code
-        # # use original causal LM model to load the embedding layers
-        # causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
-        # causal_lm_model.resize_token_embeddings(len(tokenizer))
-        # if not args.original_model == args.adapted_model_dir:
-        #     causal_lm_model.transformer.wte = wte
-        #     causal_lm_model.transformer.wpe = wpe
-
         if "tr5b-1B3" in args.original_model: # previous 1.3B bigsience model
             token_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wte.pt')
             add_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wpe.pt')
@@ -418,21 +441,25 @@ def load_model(args, inference=False):
         return model
 
     pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id
+
+    # baseline: only need to add task-specific adapters 
+    # (keeps separated for now for easier debugging)
+    if args.baseline:
+        model = None
+        if args.task_layers == "task-adapters":
+            model = load_task_specific_adapters(args, model, inference)
+        elif args.task_layers == "last-layer":
+            model = make_last_layer_trainable(args, model, inference)
+        elif args.task_layers == "full-model":
+            model = make_base_model_trainable(args, model, inference)
+        return model
+
     model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
                                                               pad_token_id=pad_token_id,
                                                               cache_dir=args.cache_dir,
                                                               revision=args.revision,
                                                               **optional_model_kwargs)
-
-    # baseline: only need to add task-specific adapters 
-    # (keeps separated for now for easier debugging)
-    if args.baseline:
-        if args.task_layers == "task-adapters":
-            model = load_task_specific_adapters(args, model, inference)
-        elif args.task_layers == "last-layer":
-            model = make_last_layer_trainable(args, model, inference)
-        return model
-
+                                                              
     # adapted models
     if not args.cross_lingual or inference:
         model = load_embedding_layers(args, tokenizer, model)

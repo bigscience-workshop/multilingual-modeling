@@ -659,6 +659,10 @@ def main():
         model_args, data_args, training_args, adapter_args, sft_args = parser.parse_args_into_dataclasses()
     
     training_args.data_dir = f'{training_args.output_dir}'
+    
+    if sft_args.train_sft and training_args.max_steps:
+        # override sparse_ft_max_steps_per_iteration if training_args.max_steps is set
+        sft_args.sparse_ft_max_steps_per_iteration = training_args.max_steps
 
     assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'emb-and-sft')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')

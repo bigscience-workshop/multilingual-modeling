@@ -61,7 +61,7 @@ class SftArguments:
     ) # changed from False to True
     
     ft_params_proportion: Optional[float] = field(
-        default=0.01,
+        default=None,
         metadata={
             "help": "The proportion of model parameters for which to learn non-zero differences during fine-tuning."
         },
@@ -79,25 +79,25 @@ class SftArguments:
         },
     )
     full_ft_min_steps_per_iteration: Optional[int] = field(
-        default=10,
+        default=None,
         metadata={
             "help": "Minimum number of steps per parameter selection iteration during full fine-tuning."
         },
     )
     sparse_ft_min_steps_per_iteration: Optional[int] = field(
-        default=10,
+        default=None,
         metadata={
             "help": "Minimum of steps per parameter selection iteration during sparse fine-tuning."
         },
     )
     full_ft_max_steps_per_iteration: Optional[int] = field(
-        default=100,
+        default=None,
         metadata={
             "help": "Maximum number of steps per parameter selection iteration during full fine-tuning."
         },
     )
     sparse_ft_max_steps_per_iteration: Optional[int] = field(
-        default=100,
+        default=None,
         metadata={
             "help": "Maximum of steps per parameter selection iteration during sparse fine-tuning."
         },

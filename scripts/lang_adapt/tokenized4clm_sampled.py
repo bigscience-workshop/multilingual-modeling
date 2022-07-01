@@ -33,6 +33,7 @@ parser.add_argument('--vocab_size', default=130_000, type=int)
 parser.add_argument('--extend_vocab', action='store_true')
 parser.add_argument('--sample_size', default=None, type=int)
 parser.add_argument("--use_auth_token", default=False, action="store_true")
+parser.add_argument("--seed", default=42, type=int)
 
 args = parser.parse_args()
 lang = args.lang
@@ -44,7 +45,7 @@ if  args.sample_size:
         "oscar", 
         f"unshuffled_deduplicated_{lang}", 
         cache_dir=args.hf_cache_dir
-    )["train"].shuffle(seed=42).select(range(args.sample_size))
+    )["train"].shuffle(seed=args.seed).select(range(args.sample_size))
    
 else: 
     raw_datasets = load_dataset(

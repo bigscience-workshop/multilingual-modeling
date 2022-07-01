@@ -1,21 +1,34 @@
 # README
 
 ### Tokenizer and Tokenization of Dataset
-Run `tokenized4clm.py` to train the tokenizer on OSCAR dataset.
-- `lang`: language name (e.g., "de", "th")
-- `model`: model that uses this tokenizer (e.g., "gpt2", "bigscience/bloom-1b3`)
-- `tokenizer_dir`: path directory to save the tokenizer. The tokenizer will be saved as `{lang}_oscar_tokenizer_{vocab_size}`
-- `hf_cache_dir` (default is "~/.cache/huggingface/transformers"): cache directory for downloading the OSCAR dataset and GPT2 tokenizer.
-- `vocab_size`: vocab size of the tokenizer
-
-
 Run `tokenized4clm_sampled.py` to train the tokenizer on the subset of OSCAR dataset.
 - `lang`: language name (e.g., "de", "th")
-- `tokenizer_dir`: path directory to save the tokenizer. The tokenizer will be saved as `{lang}_oscar_tokenizer_{vocab_size}`
-- `hf_cache_dir` (default is "~/.cache/huggingface/transformers"): cache directory for downloading the OSCAR dataset and GPT2 tokenizer.
+- `model`: original tokenizer (e.g., "bigscience/bloom-1b3")
+- `tokenizer_dir`: path directory to save the tokenizer. The tokenizer will be saved as `tok_${model}_${lang}_oscar_${sample_size}samples_${vocab_size}vocab_{replace/extend}`
+- `cache_dir` (default is "~/.cache/huggingface/transformers"): cache directory for downloading the OSCAR dataset and GPT2 tokenizer.
 - `vocab_size`: vocab size of the tokenizer
 - `sample_size`: the amount of samples to use to train the  tokenizer (randomly selected)
+- `use_auth_token`: must be used for BLOOM model
+- `extend`: if set, it means that we are extending instead of replacing.
 
+```
+tokenizer_dir=... # directory to save trained tokenizer
+cache_dir=... # directory to cache downloaded HF model
+lang=...  # language
+sample_size=...  # training sample size
+vocab_size=...  # vocab size of tokenizer
+model="bigscience/bloom-1b3"
+
+python ./scripts/lang_adapt/tokenized4clm_sampled.py \
+--lang $lang \
+--model $model \
+--tokenizer_dir  \
+--hf_cache_dir $cache_dir \
+--vocab_size $vocab_size \
+--sample_size $sample_size \
+--use_auth_token
+--extend  # use "extend" for the embedding strategy of extending vocab.
+```
 ---
 
 ### Language Adaptation (6 Combinations)

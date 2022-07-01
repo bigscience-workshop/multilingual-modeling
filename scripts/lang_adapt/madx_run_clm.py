@@ -111,10 +111,6 @@ class ModelArguments:
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
     )
-    finetuning_strategies: str = field(
-        default="full",
-        metadata={"help": "choose one of the three strategies - 'full', 'bitfit'"},
-    )
     adapter_placement: str = field(
         default="all", 
         metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},
@@ -580,16 +576,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     #elif model_args.embedding_strategies == "replace":
     #    model.resize_token_embeddings(len(tokenizer))
 
-    print(f"✅ Use Finetuning Strategy: {model_args.finetuning_strategies}")
-
-    if model_args.finetuning_strategies == "bitfit":
-        for name, param in model.transformer.named_parameters():
-            if 'bias' not in name:
-                param.requires_grad = False
-    elif model_args.finetuning_strategies == "full":
-        # No modification needed
-        pass
-
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
@@ -599,6 +585,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             emb_params += param.numel()
         elif model_args.lang_adapt_strategies == "emb":
             param.requires_grad = False
+        elif model_args.lang_adapt_strategies == "bitfit":
+            for name, param in model.transformer.named_parameters():
+                if 'bias' not in name:
+                    param.requires_grad = False
 
         if not param.requires_grad:
             print(f"🥶 Frozen layer '{name}'")
@@ -630,7 +620,7 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt')
+    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'bitfit')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging

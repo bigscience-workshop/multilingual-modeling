@@ -104,7 +104,7 @@ class ModelArguments:
         },
     )
     lang_adapt_strategies: str = field(
-        default="",
+        default=None,
         metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
     )
     embedding_strategies: str = field(
@@ -620,10 +620,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
             param.requires_grad = True
             emb_params += param.numel()
-        elif model_args.lang_adapt_strategies == "emb":
-            param.requires_grad = False
-        elif model_args.lang_adapt_strategies == "bitfit":
-            for name, param in model.transformer.named_parameters():
+        elif model_args.lang_adapt_strategies is not None:
+            if model_args.lang_adapt_strategies == "emb":
+                param.requires_grad = False
+            elif model_args.lang_adapt_strategies == "bitfit":
                 if 'bias' not in name:
                     param.requires_grad = False
 

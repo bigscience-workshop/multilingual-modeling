@@ -34,7 +34,7 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
-from transformers.adapters import PrefixTuningConfig
+from transformers.adapters import PrefixTuningConfig, LoRAConfig
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -193,6 +193,40 @@ class DataTrainingArguments:
                 extension = self.validation_file.split(".")[-1]
                 assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, a json or a txt file."
 
+@dataclass
+class ParamEfficientArguments(MultiLingAdapterArguments):
+    """
+    Arguments pertaining to other parameter efficient techniques such as (LoRA, BitFit, etc.)
+    """
+    # lora
+    selfattn_lora: bool = field(
+        default=True,
+        metadata={"help": "If True, add LoRA to the self-attention weights of a model. Defaults to True."},
+    )
+    intermediate_lora: bool = field(
+        default=False,
+        metadata={"help": "If True, add LoRA to the intermediate MLP weights of a model. Defaults to False."},
+    )
+    output_lora: bool = field(
+        default=False,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    r_lora: Optional[int] = field(
+        default=8,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    alpha_lora: Optional[int] = field(
+        default=8,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    dropout_lora: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    init_weights_lora: Optional[str] = field(
+        default='lora',
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
 
 def load_tokenizer(model_args):
     tokenizer_kwargs = {
@@ -320,9 +354,9 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
         # cache tokenized data
         base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
 
-        if saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
+        if not data_args.overwrite_cache and saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
             logger.info(f"✅ loaded tokenized_data from {saved_tokenized_datasets_fp}")
         else:
@@ -414,9 +448,9 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
 
     with training_args.main_process_first(desc="grouping texts together"):
         base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval.pt")
+        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
 
-        if saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
+        if not data_args.overwrite_cache and saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
             logger.info(f"✅ loaded lm_data from {saved_lm_datasets_fp}")
         else:
@@ -433,13 +467,8 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
     return lm_datasets
 
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
-    #if "emb" in model_args.lang_adapt_strategies:
-    #    if "replace" in model_args.embedding_strategies:
-    #        for name, param in model.named_parameters():
-    #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
-    #                param.requires_grad = False
-
     def get_adapter_config(adapter_args, model_args):
+        # modify here for new parameter efficient techniques associated with adapter-hub
         if adapter_args.adapter_config == "prefix_tuning":
             if model_args.adapter_placement == "all":
                 adapter_config = PrefixTuningConfig(bottleneck_size = 800)
@@ -449,9 +478,17 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                                                     leave_out = [i for i in range(0,24) if not i in adapters2use]
                 )
 
-
+        elif adapter_args.adapter_config == "lora":
+            adapter_config = LoRAConfig(
+                selfattn_lora = adapter_args.selfattn_lora,
+                intermediate_lora = adapter_args.intermediate_lora,
+                output_lora = adapter_args.output_lora, 
+                r = adapter_args.r_lora,
+                alpha = adapter_args.alpha_lora,
+                dropout = adapter_args.dropout_lora,
+                init_weights = adapter_args.init_weights_lora,
+            )
         else:
-
             if model_args.adapter_placement == "all":
                 adapter_config = AdapterConfig.load(
                     adapter_args.adapter_config,
@@ -500,8 +537,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             )
         else:
             lang_adapter_name = None
+        
         # Freeze all model weights except of those of this adapter
         model.train_adapter(task_name, train_embeddings=True)
+        
         # Set the adapters to be used in every forward pass
         #if lang_adapter_name:
         #    model.set_active_adapters(ac.Stack(lang_adapter_name, task_name))
@@ -534,7 +573,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
         model.resize_token_embeddings(len(tokenizer))
         overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
-        print(len(tokenizer))
         print(f"{len(overlap)} tokens overlapped")
         curr_vocab = tokenizer.vocab
         orig_vocab = orig_tokenizer.vocab
@@ -549,7 +587,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
-        print(len(tokenizer))
         model.tie_weights()
 
     elif model_args.embedding_strategies == "extend":
@@ -607,7 +644,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, MultiLingAdapterArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, ParamEfficientArguments))
 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -620,7 +657,7 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'bitfit')
+    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'lora', 'bitfit')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging

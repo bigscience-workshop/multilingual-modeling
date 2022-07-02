@@ -65,6 +65,10 @@ parser.add_argument("--madx_lang_adapter", default=None)
 parser.add_argument("--baseline", default=False, action="store_true")
 parser.add_argument("--deepspeed", required=False)
 
+task_layers = ["task-adapters", "last-layer", "full-model"]
+parser.add_argument("--task_layers", choices=task_layers, required=True)
+
+
 # mapping of tasks to model/trainer classes
 model_class_mapping = {
     XNLI: AutoModelForSequenceClassification, 
@@ -152,14 +156,21 @@ logger.info(f"test = {len(test_dataset)} samples")
 
 # load tokenizer
 logger.info("Loading tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision)
-tokenizer.pad_token = tokenizer.eos_token
+tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 # TODO: we probably need better code for this than multiple if-else statements
-en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision)
-en_tokenizer.pad_token = en_tokenizer.eos_token
+en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
+if en_tokenizer.pad_token is None:
+    en_tokenizer.pad_token = en_tokenizer.eos_token
 
 if args.dataset == XNLI:
+    if tokenizer.eos_token is None:
+        tokenizer.eos_token = tokenizer.sep_token
+    if en_tokenizer.eos_token is None:
+        en_tokenizer.eos_token = en_tokenizer.sep_token
+
     def tokenize_function(examples):
         return tokenizer(f'{examples["premise"]} {tokenizer.eos_token} {examples["hypothesis"]}', max_length=128, padding="max_length", truncation=True)
 
@@ -327,7 +338,6 @@ elif args.dataset == XLSUM:
         # labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
         
         # result = metric.compute(predictions=preds, references=labels)
-        assert False
 
 else:
     raise ValueError("Unknown dataset provided")
@@ -364,7 +374,43 @@ def print_model_trainable_layers(model):
             print(f"🚀 Trainable layer '{name}'")
 
 def load_model(args, inference=False):
+    def make_last_layer_trainable(args, model, inference=False):
+        if model is None:
+            if not inference:
+                model_path = args.original_model
+            else:
+                model_path = args.pretrained_adapters_dir
+            print(f"Loaded model from {model_path}")
+            model = model_class_mapping[args.dataset].from_pretrained(model_path, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
+        model.freeze_model(freeze=True)
+        return model
+    
+    def make_base_model_trainable(args, model, inference=False):
+        if model is None:
+            if not inference:
+                model_path = args.original_model
+            else:
+                model_path = args.pretrained_adapters_dir
+            print(f"Loaded model from {model_path}")
+            model = model_class_mapping[args.dataset].from_pretrained(model_path, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
+        model.freeze_model(freeze=False)
+        return model
+
     def load_task_specific_adapters(args, model, inference=False):
+        if model is None:
+            model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
+                                                                      pad_token_id=pad_token_id,
+                                                                      cache_dir=args.cache_dir,
+                                                                      revision=args.revision,
+                                                                      **optional_model_kwargs)
         if not inference:
             model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
@@ -375,14 +421,6 @@ def load_model(args, inference=False):
             return model
 
     def load_embedding_layers(args, tokenizer, model):
-        ###### legacy code
-        # # use original causal LM model to load the embedding layers
-        # causal_lm_model = AutoModelForCausalLM.from_pretrained(args.original_model)
-        # causal_lm_model.resize_token_embeddings(len(tokenizer))
-        # if not args.original_model == args.adapted_model_dir:
-        #     causal_lm_model.transformer.wte = wte
-        #     causal_lm_model.transformer.wpe = wpe
-
         if "tr5b-1B3" in args.original_model: # previous 1.3B bigsience model
             token_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wte.pt')
             add_embedding = torch.load(f'{args.adapted_model_dir}/embedding_wpe.pt')
@@ -403,25 +441,35 @@ def load_model(args, inference=False):
         return model
 
     pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id
+
+    # baseline: only need to add task-specific adapters 
+    # (keeps separated for now for easier debugging)
+    if args.baseline:
+        model = None
+        if args.task_layers == "task-adapters":
+            model = load_task_specific_adapters(args, model, inference)
+        elif args.task_layers == "last-layer":
+            model = make_last_layer_trainable(args, model, inference)
+        elif args.task_layers == "full-model":
+            model = make_base_model_trainable(args, model, inference)
+        return model
+
     model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
                                                               pad_token_id=pad_token_id,
                                                               cache_dir=args.cache_dir,
                                                               revision=args.revision,
                                                               **optional_model_kwargs)
-
-    # baseline: only need to add task-specific adapters 
-    # (keeps separated for now for easier debugging)
-    if args.baseline:
-        model = load_task_specific_adapters(args, model, inference)
-        return model
-
+                                                              
     # adapted models
     if not args.cross_lingual or inference:
         model = load_embedding_layers(args, tokenizer, model)
         if args.madx_lang_adapter:
             model = load_language_adapters(args, model)
     
-    model = load_task_specific_adapters(args, model, inference)
+    if args.task_layers == "task-adapters":
+        model = load_task_specific_adapters(args, model, inference)
+    elif args.task_layers == "last-layer":
+        model = make_last_layer_trainable(args, model, inference)
     return model
 
 
@@ -439,8 +487,14 @@ if args.do_train:
             label_pad_token_id=-100,
         )
     
+    if model.active_adapters is None:
+        logger.info("No active adapters")
+        trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
+    else:
+        trainer_class = trainer_class_mapping[args.dataset]
     logger.info(f"Using {trainer_class_mapping[args.dataset]} for training")
-    trainer = trainer_class_mapping[args.dataset](
+    
+    trainer = trainer_class(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -482,7 +536,13 @@ if args.do_predict:
             pad_to_multiple_of=8 if training_args.fp16 else None,
         )
 
-    eval_trainer = trainer_class_mapping[args.dataset](
+    if model.active_adapters is None:
+        logger.info("No active adapters")
+        trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
+    else:
+        trainer_class = trainer_class_mapping[args.dataset]
+
+    eval_trainer = trainer_class(
         model=model,
         args=training_args,
         eval_dataset=test_dataset,

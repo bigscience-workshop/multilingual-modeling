@@ -16,7 +16,8 @@ from transformers import (
     get_linear_schedule_with_warmup,
     LogitsProcessorList,
     BeamSearchScorer,
-    ForcedEOSTokenLogitsProcessor
+    ForcedEOSTokenLogitsProcessor,
+    set_seed,
 )
 
 # setup logging
@@ -436,7 +437,7 @@ def load_model(args, inference=False):
         return model
     
     def load_language_adapters(args, model):
-        adapter_name = model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")
+        adapter_name = model.load_adapter(args.madx_lang_adapter)
         model.set_active_adapters(adapter_name)
         return model
 

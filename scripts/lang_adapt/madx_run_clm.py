@@ -469,12 +469,16 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     def get_adapter_config(adapter_args, model_args):
         # modify here for new parameter efficient techniques associated with adapter-hub
+        if adapter_args.adapter_reduction_factor:
+            bottleneck = int(model.transformer.embed_dim // adapter_args.adapter_reduction_factor)
+        else:
+            bottleneck = 800
         if adapter_args.adapter_config == "prefix_tuning":
             if model_args.adapter_placement == "all":
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+                adapter_config = PrefixTuningConfig(bottleneck_size = bottleneck)
             else:
                 adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
+                adapter_config = PrefixTuningConfig(bottleneck_size = bottleneck, 
                                                     leave_out = [i for i in range(0,24) if not i in adapters2use]
                 )
 

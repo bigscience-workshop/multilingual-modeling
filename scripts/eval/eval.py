@@ -1,6 +1,7 @@
 import logging
 import argparse
 import os
+import json
 
 from datasets import load_dataset
 from datasets import load_metric
@@ -521,9 +522,11 @@ if args.do_predict:
     assert len(evaluation_dirs) > 0
     print(f"Found {len(evaluation_dirs)} checkpoints")
 
-    # load the last checkpoint. 
-    args.pretrained_adapters_dir = f"{args.output_dir}/{evaluation_dirs[-1]}"
-    print(f"[Evaluation] Loading trained model from {args.pretrained_adapters_dir}")
+    # load the best checkpoint. 
+    with open(f"{args.output_dir}/{evaluation_dirs[-1]}/trainer_state.json") as rf:
+        args.pretrained_adapters_dir = json.load(rf)['best_model_checkpoint']
+
+    print(f"[Evaluation] Loading trained model (best checkpoint) from {args.pretrained_adapters_dir}")
         
     model = load_model(args, inference=True)
     model.eval()

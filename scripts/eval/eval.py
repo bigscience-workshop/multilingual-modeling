@@ -78,6 +78,7 @@ model_class_mapping = {
 trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer, WIKIANN: Trainer}
 trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer, WIKIANN: AdapterTrainer}
 trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments, WIKIANN: TrainingArguments}
+task_eval_metric_best_model = {XNLI: 'eval_accuracy', WIKIANN: 'eval_overall_f1'}
 
 args = parser.parse_args()
 
@@ -362,6 +363,7 @@ training_args = trainer_args_mapping[args.dataset](
     report_to="tensorboard",
     logging_dir=f"{args.output_dir}/logs",
     load_best_model_at_end=True,
+    metric_for_best_model=task_eval_metric_best_model[args.dataset],
     deepspeed=args.deepspeed,
     **optional_trainer_args,
 )

@@ -1,6 +1,8 @@
 # Run on JZ
 
 ## Getting Started
+Clone the GitHub Repository and `cd` into it to run commands like `sbatch jz/emb.sh my 100000 24000 extend`.
+
 ```
 git clone https://github.com/bigscience-workshop/multilingual-modeling.git
 cd multilingual-modeling/
@@ -8,6 +10,7 @@ cd multilingual-modeling/
 
 ## Change Configuration
 ### SLURM Configuration
+We need to change the SLURM setting according to JZ to get the necessary compute.
 ```
 # use a single V100 for each run
 #SBATCH --partition=gpu-he --gres=gpu:1  
@@ -17,7 +20,8 @@ cd multilingual-modeling/
 #SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/misc/lang-adapt-env_jz_lang_adapter.err
 ```
 
-### Folders configuration (Line 22 - 28 in jz/emb.sh)
+### Directory configuration (Line 22 - 28 in jz/emb.sh)
+Also, we need to change 6 lines of the directory configuration.
 ```
 # virtual environment folder for `python3 -m venv $env_dir`
 env_dir="/users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/jz/env_jz_lang_adapter"
@@ -40,6 +44,7 @@ logging_tb_dir="/users/zyong2/data/zyong2/bigscience/reports/misc/"
 
 ## Runs
 ### 07/05/2022 (Language Adaptation - Embedding-only)
+Run the following commands for doing language adaptation for 4 languages varying along the the size of training samples. 
 ```
 sbatch jz/emb.sh my 100000 24000 extend
 sbatch jz/emb.sh my 10000 5000 extend

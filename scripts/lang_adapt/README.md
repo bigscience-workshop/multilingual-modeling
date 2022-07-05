@@ -24,7 +24,7 @@ tokenizer_dir="${output_dir}/tok_$(basename $bigs_model)_${lang}_oscar_${sample_
 python ./scripts/lang_adapt/tokenized4clm_sampled.py \
 --lang $lang \
 --model $bigs_model \
---tokenizer_dir /users/zyong2/data/zyong2/bigscience/data/processed/020 \
+--tokenizer_dir $tokenizer_dir \
 --hf_cache_dir $cache_dir \
 --vocab_size $vocab_size \
 --sample_size $sample_size \

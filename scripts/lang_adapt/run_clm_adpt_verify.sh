@@ -42,15 +42,15 @@ EMB_STRAT="overlap-replace"
 
 tokenizer_dir=./trained_tokenizers//tok_bloom-1b3_de_oscar_100000samples_24000vocab_replace
 cache_dir=./cache #"/users/zyong2/data/zyong2/huggingface/"
-output_dir="./KEEP_RESULTS/de/1b3-50k-prelora-"$adapter_config"-"$MAX_TRAIN_SAMPLES"samples-"$EMB_STRAT"-"$ADPT_STRAT-"$ADPT_REDUCTION_FACTOR"reduction""
-logging_dir="./KEEP_RESULTS/de/1b3-50k-prelora-"$adapter_config"-"$MAX_TRAIN_SAMPLES"samples-"$EMB_STRAT"-"$ADPT_STRAT-"$ADPT_REDUCTION_FACTOR"reduction""
+output_dir="./KEEP_RESULTS/de/1b3-50k-"$adapter_config"-"$MAX_TRAIN_SAMPLES"samples-"$EMB_STRAT"-"$ADPT_STRAT-"$ADPT_REDUCTION_FACTOR"reduction""
+logging_dir="./KEEP_RESULTS/de/1b3-50k-"$adapter_config"-"$MAX_TRAIN_SAMPLES"samples-"$EMB_STRAT"-"$ADPT_STRAT-"$ADPT_REDUCTION_FACTOR"reduction""
 mkdir -p $output_dir
 mkdir -p $logging_dir
 
 cp ./run_clm_adpt_verify.sh $output_dir/run_clm_adpt.sh
 
 # CUDA_VISIBLE_DEVICES=4 python ../../../dev/multilingual-modeling/scripts/lang_adapt/madx_run_clm.py \
-CUDA_VISIBLE_DEVICES=6 python ./madx_run_clm.py \
+CUDA_VISIBLE_DEVICES=5 python ./madx_run_clm.py \
     --fp16 \
     --seed 0 \
     --model_name_or_path $BIGS_MODEL \

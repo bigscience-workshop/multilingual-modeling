@@ -28,17 +28,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--lang', type=str, required=True)
 parser.add_argument('--model', type=str, required=True)
 parser.add_argument('--tokenizer_dir', type=str, required=True)
+parser.add_argument('--tok_strategy', type=str, choices=["replace", "extend"] ,required=True)
 parser.add_argument('--hf_cache_dir', default="~/.cache/huggingface/transformers", type=str)
-parser.add_argument('--vocab_size', default=130_000, type=int)
-parser.add_argument('--extend_vocab', action='store_true')
-parser.add_argument('--sample_size', default=None, type=int)
+parser.add_argument('--vocab_size', default=24_000, type=int)
+parser.add_argument('--sample_size', default=100_000, type=int)
 parser.add_argument("--use_auth_token", default=False, action="store_true")
 parser.add_argument("--seed", default=42, type=int)
 
 args = parser.parse_args()
 lang = args.lang
-if args.extend_vocab:
-    assert args.vocab_size < 100_000
 
 if  args.sample_size:
     raw_datasets = load_dataset(
@@ -67,7 +65,7 @@ def batch_iterator():
 unique_toks = set()
 model_name = pathlib.Path(args.model).parts[-1]
 
-if args.extend_vocab:
+if args.tok_strategy == 'extend':
     # Yong: have checked that added tokens would have indices after the original vocab size.
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     assert tokenizer.is_fast
@@ -76,14 +74,14 @@ if args.extend_vocab:
     added = tokenizer.add_tokens([tok for tok in new_tokenizer.vocab.keys()])
     print([tok for tok in new_tokenizer.vocab.keys()])
     print(f"Overlap with previous vocab: {args.vocab_size - added}")
-    tokenizer.save_pretrained(f"{args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_extend")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_extend")
+    tokenizer.save_pretrained(f"{args.tokenizer_dir}")
+    print(f"Saved tokenizer to {args.tokenizer_dir}")
 
-else:
+elif args.tok_strategy == 'replace':
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_auth_token=args.use_auth_token)
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)
     print("Unique toks, ", len(unique_toks))
     print("✅ Trained tokenizer with len ", len(new_tokenizer))
-    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_replace")
-    print(f"Saved tokenizer to {args.tokenizer_dir}/tok_{model_name}_{lang}_oscar_{args.sample_size}samples_{args.vocab_size}vocab_replace")
+    new_tokenizer.save_pretrained(f"{args.tokenizer_dir}")
+    print(f"Saved tokenizer to {args.tokenizer_dir}")

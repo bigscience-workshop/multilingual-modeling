@@ -1,0 +1,5 @@
+git+https://github.com/yongzx/adapter-transformers.git@f55ab013599088a35c87a880ba13a6d912e27ef4
+--extra-index-url https://download.pytorch.org/whl/cu113
+torch
+datasets
+tensorboardX

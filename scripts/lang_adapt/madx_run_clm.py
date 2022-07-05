@@ -104,7 +104,7 @@ class ModelArguments:
         },
     )
     lang_adapt_strategies: str = field(
-        default="",
+        default=None,
         metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
     )
     embedding_strategies: str = field(
@@ -488,7 +488,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 dropout = adapter_args.dropout_lora,
                 init_weights = adapter_args.init_weights_lora,
             )
+        
         else:
+            # TODO: confirm with Vassilina what goes into this condition
             if model_args.adapter_placement == "all":
                 adapter_config = AdapterConfig.load(
                     adapter_args.adapter_config,
@@ -620,8 +622,13 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
             param.requires_grad = True
             emb_params += param.numel()
-        elif model_args.lang_adapt_strategies == "emb":
-            param.requires_grad = False
+        
+        elif model_args.lang_adapt_strategies is not None:
+            if model_args.lang_adapt_strategies == "emb":
+                param.requires_grad = False
+            elif model_args.lang_adapt_strategies == "bitfit":
+                if 'bias' not in name:
+                    param.requires_grad = False
 
         if not param.requires_grad:
             print(f"🥶 Frozen layer '{name}'")
@@ -629,7 +636,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         else:
             print(f"🚀 Trainable layer '{name}'")
             trainable_params += param.numel()
-         
 
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
@@ -653,7 +659,7 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'lora')
+    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'lora', 'bitfit')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging

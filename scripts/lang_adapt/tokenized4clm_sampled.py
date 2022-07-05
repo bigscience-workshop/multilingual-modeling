@@ -77,7 +77,7 @@ if args.tok_strategy == 'extend':
     tokenizer.save_pretrained(f"{args.tokenizer_dir}")
     print(f"Saved tokenizer to {args.tokenizer_dir}")
 
-elif args.tok_strategy == 'replace':
+elif args.tok_strategy in ('replace', 'overlap-replace'):
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_auth_token=args.use_auth_token)
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)

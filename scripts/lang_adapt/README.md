@@ -9,25 +9,27 @@ Run `tokenized4clm_sampled.py` to train the tokenizer on the subset of OSCAR dat
 - `vocab_size`: vocab size of the tokenizer
 - `sample_size`: the amount of samples to use to train the tokenizer (randomly selected)
 - `use_auth_token`: must be used for BLOOM model
-- `extend`: if set, it means that we are extending instead of replacing.
+- `tok_strategy`: extend, replace or overlap-replace
 
 ```
-tokenizer_dir=... # directory to save trained tokenizer
-cache_dir=... # directory to cache downloaded HF model
+cache_dir=...
 lang=...  # language
 sample_size=...  # training sample size
 vocab_size=...  # vocab size of tokenizer
-model="bigscience/bloom-1b3"
+tok_strategy=...  # extend, replace, overlap-replace
+bigs_model="bigscience/bloom-1b3"
+
+tokenizer_dir="${output_dir}/tok_$(basename $bigs_model)_${lang}_oscar_${sample_size}samples_${vocab_size}vocab_${tok_strategy}"
 
 python ./scripts/lang_adapt/tokenized4clm_sampled.py \
 --lang $lang \
---model $model \
---tokenizer_dir $tokenizer_dir \
+--model $MODEL \
+--tokenizer_dir /users/zyong2/data/zyong2/bigscience/data/processed/020 \
 --hf_cache_dir $cache_dir \
 --vocab_size $vocab_size \
 --sample_size $sample_size \
---use_auth_token
---extend  # use "extend" for the embedding strategy of extending vocab.
+--use_auth_token \
+--tok_strategy $tok_strategy
 ```
 ---
 

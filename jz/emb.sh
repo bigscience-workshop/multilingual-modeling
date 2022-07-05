@@ -45,8 +45,8 @@ logging_tb_dir="${logging_tb_dir}/$(basename $bigs_model)_${lang}_oscar_${sample
 module load python/3.7.4
 [ -d $env_dir ] || python3 -m venv $env_dir
 source "${env_dir}/bin/activate"
-# pip3 install --upgrade pip
-# pip3 install -r "${mm_dir}/requirements.txt"
+pip3 install --upgrade pip
+pip3 install -r "${mm_dir}/requirements.txt"
 
 # train tokenizer
 python "${mm_dir}/scripts/lang_adapt/tokenized4clm_sampled.py" \

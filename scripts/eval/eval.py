@@ -155,7 +155,7 @@ logger.info(f"val = {len(val_dataset)} samples")
 logger.info(f"test = {len(test_dataset)} samples")
 
 # load tokenizer
-logger.info("Loading tokenizer...")
+logger.info(f"Loading tokenizer from {args.tokenizer}...")
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
@@ -416,6 +416,7 @@ def load_model(args, inference=False):
             model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             return model
         else:
+            print(f"[Evaluation] Load task adapters from {args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
             adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
             model.set_active_adapters(adapter_name)
             return model
@@ -433,11 +434,13 @@ def load_model(args, inference=False):
             model.transformer.word_embeddings = token_embedding
             model.transformer.word_embeddings_layernorm = add_embedding
 
+        logger.info(f"Replaced embeddings with {token_embedding} and {add_embedding}...")
         return model
     
     def load_language_adapters(args, model):
         adapter_name = model.load_adapter(args.madx_lang_adapter, config="pfeiffer+inv")
         model.set_active_adapters(adapter_name)
+        logger.info(f"Added Adapter {args.madx_lang_adapter}...")
         return model
 
     pad_token_id = en_tokenizer.pad_token_id if (not inference and args.cross_lingual) else tokenizer.pad_token_id

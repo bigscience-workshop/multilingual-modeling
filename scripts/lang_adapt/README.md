@@ -13,6 +13,7 @@ Run `tokenized4clm_sampled.py` to train the tokenizer on the subset of OSCAR dat
 
 ```
 cache_dir=...
+output_dir=...
 lang=...  # language
 sample_size=...  # training sample size
 vocab_size=...  # vocab size of tokenizer

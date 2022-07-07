@@ -103,9 +103,13 @@ class ModelArguments:
             "with private models)."
         },
     )
+    reinit_weights: bool = field(
+        default=False,
+        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
+    )
     lang_adapt_strategies: str = field(
         default=None,
-        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
+        metadata={"help": "language adaptation strategies"},
     )
     embedding_strategies: str = field(
         default="",
@@ -594,6 +598,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     elif model_args.embedding_strategies == "extend":
         original_embedding_layer = model.get_input_embeddings()
         original_vocab_size = original_embedding_layer.weight.shape[0]
+        print(f"Tokens for new languages: {len(tokenizer) - original_vocab_size}")
         model.resize_token_embeddings(len(tokenizer))
         model.tie_weights()
         
@@ -605,15 +610,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
         embedding_layer.weight.register_hook(lambda grad: zero_grad(grad))
 
-    #if model_args.embedding_strategies == "overlap-replace":
-    #    if not tokenizer.name_or_path == model_args.model_name_or_path:
-    #        orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    #    model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
-    #    model._active_embedding = "lng_emb"
-    #    model.delete_embeddings('default')
-    #    model.tie_weights()
-    #elif model_args.embedding_strategies == "replace":
-    #    model.resize_token_embeddings(len(tokenizer))
+    if model_args.reinit_weights:
+        print(f"❗️ Reinitialize model's weights")
+        model.init_weights()
 
     trainable_params = 0
     frozen_params = 0
@@ -629,6 +628,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             elif model_args.lang_adapt_strategies == "bitfit":
                 if 'bias' not in name:
                     param.requires_grad = False
+                else:
+                    param.requires_grad = True
+            elif model_args.lang_adapt_strategies == "continual-pretrain":
+                param.requires_grad = True
 
         if not param.requires_grad:
             print(f"🥶 Frozen layer '{name}'")
@@ -659,7 +662,7 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt', 'lora', 'bitfit')
+    assert model_args.lang_adapt_strategies in ('continual-pretrain', 'emb', 'madx', 'emb-then-adpt', 'lora', 'bitfit')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging

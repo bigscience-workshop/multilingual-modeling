@@ -194,17 +194,17 @@ if args.dataset == XNLI:
 elif args.dataset == XLSUM:
     # for decoder only structure, input and target needs to have the same length
     # also, unlike enc-dec model, we cannot feed the model some text and expect the model to generate only summary 
-    # we need to have input = [text] + [padding] and the output be [text] + [summary].
+    # we need to train the model with [text] + [sep] + [summary]. 
     def tokenize_function(example):
-        text = tokenizer(f'{example["text"]}', max_length=XLSUM_INPUT_LEN - 1, padding="max_length", truncation=True)
-        input_text = tokenizer.decode(text['input_ids'], skip_special_tokens=False) + tokenizer.sep_token
-
+        inputs = tokenizer(f'{example["text"]}', max_length=XLSUM_INPUT_LEN, padding="max_length", truncation=True)
+        inputs['input_ids'][-1] = tokenizer.sep_token_id
+        
         with tokenizer.as_target_tokenizer():
             summaries = tokenizer(f'{example["summary"]}', max_length=XLSUM_OUTPUT_LEN, padding="max_length", truncation=True)
-            summaries_text = tokenizer.decode(summaries['input_ids'], skip_special_tokens=False)
         
-        inputs = tokenizer(f'{input_text + summaries_text}')
-        inputs["labels"] = inputs["input_ids"]
+        inputs['input_ids'] += summaries['input_ids']
+        inputs['attention_mask'] += summaries['attention_mask']
+        inputs['labels'] = inputs['input_ids']
 
         return inputs
 
@@ -299,6 +299,7 @@ elif args.dataset == XLSUM:
 
     def compute_xlsum_beam_search_metrics(model, dataset):
         # get input sentences
+        # print(torch.Tensor(dataset['input_ids']).type(torch.IntTensor))
         input_ids = torch.Tensor(dataset['input_ids']).type(torch.IntTensor)[:, :XLSUM_INPUT_LEN]
         bsz = args.per_device_eval_batch_size
 

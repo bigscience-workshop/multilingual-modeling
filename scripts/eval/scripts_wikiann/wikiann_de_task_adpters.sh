@@ -13,11 +13,11 @@
 #SBATCH --mem=100g
 
 # Specify a job name:
-#SBATCH -J exp-021-wikiann-baseline_wikiann_de_task_adapters
+#SBATCH -J exp-021-wikiann-bloom1b3_extend_wikiann_de_task_adapters
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-021-wikiann/baseline_wikiann_de_task_adapters.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-021-wikiann/baseline_wikiann_de_task_adapters.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-021-wikiann/bloom1b3_extend_wikiann_de_task_adapters.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-021-wikiann/bloom1b3_extend_wikiann_de_task_adapters.err
 
 # Set up the environment by loading modules
 set -a # automatically export all variables
@@ -32,25 +32,25 @@ source $FP_BIGS/env_try_lang_adapter/bin/activate
 LR=1e-5
 
 BIGS_MODEL="bigscience/bloom-1b3"
-MODEL_NAME="bigscience/bloom-1b3"
-TOKENIZER_NAME="bigscience/bloom-1b3"
+MODEL_NAME="/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_de_emb_100000samples_24000vocab_extend"
+TOKENIZER_NAME="/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_de_emb_100000samples_24000vocab_extend"
 
 # task-specific arguments
 TASK_DATASET="wikiann"
 TASK_LAYER="task-adapters"
 LANG="de"
-OUTPUT_DIR="/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/$(basename $BIGS_MODEL)-baseline-${LANG}-FT-${TASK_LAYER}" # where you want to save checkpoints at
+OUTPUT_DIR="/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/$(basename $MODEL_NAME)-${LANG}-FT-${TASK_LAYER}" # where you want to save checkpoints at
 CACHE_DIR="/users/zyong2/data/zyong2/huggingface" # cache dir for saving/loading HF models and XNLI datasets.
 
 
 mkdir -p $OUTPUT_DIR
 
-python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/eval/eval.py \
+python ./scripts/eval/eval.py \
 $OUTPUT_DIR \
 --lang $LANG \
 --cache_dir $CACHE_DIR \
 --dataset $TASK_DATASET \
---num_train_epochs 5 \
+--num_train_epochs 100 \
 --learning_rate $LR \
 --per_device_train_batch_size 8 \
 --gradient_accumulation_steps 4 \
@@ -59,8 +59,8 @@ $OUTPUT_DIR \
 --tokenizer $TOKENIZER_NAME \
 --do_train \
 --do_predict \
---task_layers $TASK_LAYER \
---baseline
+--task_layers $TASK_LAYER
+
 # --use_partial_data \
 # --use_partial_train_data 100 \
 # --use_partial_val_data 100 \

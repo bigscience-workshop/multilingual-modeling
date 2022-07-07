@@ -26,7 +26,6 @@ parser.add_argument("--pretrained_model", default="bert-base-multilingual-cased"
 parser.add_argument("--tokenizer", default="bert-base-multilingual-cased")
 parser.add_argument("--dataset", default="ted_multi")
 parser.add_argument("--device", default="cuda")
-parser.add_argument("--pooling", default="mean")
 args = parser.parse_args()
 
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
@@ -95,14 +94,14 @@ def get_hidden_states(args, model):
         nb_talks = 2
         talks = get_talks(dataset, nb_talks)
 
-        emb = get_hidden_states_for_talks(dataset, model, talks, args.pretrained_model, pooling=args.pooling)
-        
-        outname = f"{args.output_dir}/{args.pretrained_model.replace('/','-')}-talks-valid-{len(talks)}-{args.pooling}"
+        emb = get_hidden_states_for_talks(dataset, model, talks, args.pretrained_model)
+
+        outname = f"{args.output_dir}/{args.pretrained_model.replace('/','-')}-talks-valid-{len(talks)}"
 
     elif args.dataset == "flores":
         nb_samples = 200
-        emb = get_hidden_states_for_flores(args, model, args.pretrained_model, nb_samples = nb_samples, pooling=args.pooling)
-        outname = f"{args.output_dir}/{args.pretrained_model.replace('/','-')}-flores-{nb_samples}-{args.pooling}"
+        emb = get_hidden_states_for_flores(args, model, args.pretrained_model, nb_samples = nb_samples)
+        outname = f"{args.output_dir}/{args.pretrained_model.replace('/','-')}-flores-{nb_samples}"
 
     retrieval_acc = {}
     nb_states = model.config.num_hidden_layers
@@ -117,12 +116,12 @@ def get_hidden_states(args, model):
     plt.savefig(f'{outname}-heatmap.png')
 
 
-def get_hidden_states_for_flores(args, model, mname, nb_samples=50, pooling=""):
+def get_hidden_states_for_flores(args, model, mname, nb_samples=50):
     emb = {}
     hidden_state_size = model.config.num_hidden_layers
     for lng in bs_languages:        
         if lng in lngcode_map:
-            fname = f"{args.output_dir}/flores-{lng}-{nb_samples}-{mname.replace('/','-')}-{pooling}.pt"
+            fname = f"{args.output_dir}/flores-{lng}-{nb_samples}-{mname.replace('/','-')}.pt"
             if os.path.isfile(fname):
                 emb[lng] = load_from_file(fname)
             else:
@@ -135,20 +134,16 @@ def get_hidden_states_for_flores(args, model, mname, nb_samples=50, pooling=""):
                     x = tokenizer(t,  return_tensors="pt").input_ids.to(model.device)
                     out = model(x)
                     for state in range(hidden_state_size):
-                        if "max_min" in fname:
-                            hs = torch.cat([torch.max(out.hidden_states[state][0][1:-1], dim=0).values, torch.min(out.hidden_states[state][0][1:-1], dim=0).values]).detach()
-                        else:
-                            hs = torch.mean(out.hidden_states[state][0][1:-1], dim=0).detach()
+                        hs = torch.mean(out.hidden_states[state][0][1:-1], dim=0).detach()
                         emb[lng][state].append(Sample(sid, hs))
                 torch.save(emb[lng], fname)
     return emb
 
 
-def get_hidden_states_for_talks(dataset, model, talks, mname, pooling=""):
+def get_hidden_states_for_talks(dataset, model, talks, mname):
     emb = {}
     hidden_state_size = model.config.num_hidden_layers
-
-    fname = f"{args.output_dir}/ted_multi-{mname.replace('/','-')}-ted_multi-{len(talks)}-{pooling}.pt"
+    fname = f"{args.output_dir}/ted_multi-{mname.replace('/','-')}-ted_multi-{len(talks)}.pt"
     if os.path.isfile(fname):
         emb = load_from_file(fname)
         return emb
@@ -165,10 +160,7 @@ def get_hidden_states_for_talks(dataset, model, talks, mname, pooling=""):
                             emb[lng][state] = []
                     out = model(x)
                     for state in range(hidden_state_size):
-                        if "max_min" in fname:
-                            hs = torch.cat([torch.max(out.hidden_states[state][0], dim=0).values, torch.min(out.hidden_states[state][0], dim=0).values]).detach()
-                        else:
-                            hs = torch.mean(out.hidden_states[state][0], dim=0).detach()
+                        hs = torch.mean(out.hidden_states[state][0], dim=0).detach()
                         emb[lng][state].append(Sample(sid, hs))
     torch.save(emb, fname)
     return emb

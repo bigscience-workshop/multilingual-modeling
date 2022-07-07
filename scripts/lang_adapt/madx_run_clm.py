@@ -34,6 +34,8 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
+from transformers.adapters import PrefixTuningConfig, LoRAConfig
+
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
@@ -101,15 +103,23 @@ class ModelArguments:
             "with private models)."
         },
     )
-    lang_adapt_strategies: str = field(
-        default="",
+    reinit_weights: bool = field(
+        default=False,
         metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
+    )
+    lang_adapt_strategies: str = field(
+        default=None,
+        metadata={"help": "language adaptation strategies"},
     )
     embedding_strategies: str = field(
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
     )
-
+    adapter_placement: str = field(
+        default="all", 
+        metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},
+    )
+    
     def __post_init__(self):
         if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
             raise ValueError(
@@ -187,6 +197,40 @@ class DataTrainingArguments:
                 extension = self.validation_file.split(".")[-1]
                 assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, a json or a txt file."
 
+@dataclass
+class ParamEfficientArguments(MultiLingAdapterArguments):
+    """
+    Arguments pertaining to other parameter efficient techniques such as (LoRA, BitFit, etc.)
+    """
+    # lora
+    selfattn_lora: bool = field(
+        default=True,
+        metadata={"help": "If True, add LoRA to the self-attention weights of a model. Defaults to True."},
+    )
+    intermediate_lora: bool = field(
+        default=False,
+        metadata={"help": "If True, add LoRA to the intermediate MLP weights of a model. Defaults to False."},
+    )
+    output_lora: bool = field(
+        default=False,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    r_lora: Optional[int] = field(
+        default=8,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    alpha_lora: Optional[int] = field(
+        default=8,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    dropout_lora: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    init_weights_lora: Optional[str] = field(
+        default='lora',
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
 
 def load_tokenizer(model_args):
     tokenizer_kwargs = {
@@ -195,11 +239,12 @@ def load_tokenizer(model_args):
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
     }
-
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
+        print(f"✅ load tokenizer from: {model_args.tokenizer_name}")
     elif model_args.model_name_or_path:
         tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
+        print(f"✅ load tokenizer from: {model_args.model_name_or_path}")
     else:
         raise ValueError(
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
@@ -244,9 +289,9 @@ def load_data(data_args, model_args):
 
     if "validation" not in raw_datasets.keys():
         if data_args.max_eval_samples is not None and data_args.max_train_samples is not None:                
-            raw_datasets = raw_datasets['train'].train_test_split(train_size = data_args.max_train_samples*2, test_size = data_args.max_eval_samples*2)
+            raw_datasets = raw_datasets['train'].train_test_split(train_size = data_args.max_train_samples, test_size = data_args.max_eval_samples)
         elif data_args.max_eval_samples is not None :                
-            raw_datasets = raw_datasets['train'].train_test_split(test_size = data_args.max_eval_samples*2)
+            raw_datasets = raw_datasets['train'].train_test_split(test_size = data_args.max_eval_samples)
         else:
             raw_datasets = raw_datasets['train'].train_test_split(test_size = data.args.validation_split_percentage/100.0)
         raw_datasets['validation'] = raw_datasets['test']
@@ -261,11 +306,15 @@ def load_data(data_args, model_args):
     if data_args.max_train_samples is not None and len(raw_datasets['train']) > data_args.max_train_samples:
         # FIXME: currently assume the loaded checkpoint is trained with the first data_args.max_train_samples number of samples
         #raw_datasets["train"] = raw_datasets["train"].filter(lambda example, indice: indice < data_args.max_train_samples, with_indices=True)
+        print(raw_datasets["train"])
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
+        print(raw_datasets["train"])
 
     if data_args.max_eval_samples is not None and len(raw_datasets['validation']) > data_args.max_eval_samples:
         raw_datasets["validation"] = raw_datasets["validation"].select(range(data_args.max_eval_samples))
 
+    print("✅ Loaded Raw Dataset:")
+    print(raw_datasets)
     return raw_datasets
 
 def load_model(model_args, tokenizer):
@@ -293,10 +342,13 @@ def load_model(model_args, tokenizer):
             revision=model_args.model_revision,
             use_auth_token=True if model_args.use_auth_token else None,
         )
+        print(f"✅ load model from: {model_args.model_name_or_path}")
     else:
         model = AutoModelForCausalLM.from_config(config)
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
+        print(f"✅ load model from config: ")
+        print(config)
 
     #TODO: remap embedding parameters
 
@@ -304,14 +356,19 @@ def load_model(model_args, tokenizer):
 
 def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
-        saved_tokenized_datasets_fp = pathlib.Path(f"{training_args.data_dir}/tokenized_data.pt")
-        if saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
+        # cache tokenized data
+        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+
+        if not data_args.overwrite_cache and saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
-            logger.info(f"✅ loaded tokenized_data")
+            logger.info(f"✅ loaded tokenized_data from {saved_tokenized_datasets_fp}")
         else:
             raw_datasets = load_data(data_args, model_args)
             assert len(raw_datasets['train']) == data_args.max_train_samples
-            logger.info(f"🧠 Sanity check: loaded raw datasets have {data_args.max_train_samples} samples")
+            assert len(raw_datasets['validation']) == data_args.max_eval_samples
+            assert len(raw_datasets['test']) == data_args.max_eval_samples
+            print(f"✅ Sanity check: loaded raw datasets have {data_args.max_train_samples} training samples and {data_args.max_eval_samples} eval samples")
                                                       
             # First we tokenize all the texts.
             if training_args.do_train:
@@ -332,7 +389,7 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
                             "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
                         )
                     return output
-
+            
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
@@ -343,12 +400,13 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
             )
                                                       
             torch.save(tokenized_datasets, saved_tokenized_datasets_fp)
-            logger.info(f"✅ saved tokenized_data")
+            logger.info(f"✅ saved tokenized_data to {saved_tokenized_datasets_fp}")
 
         if "train" not in tokenized_datasets and training_args.do_train:
             raise ValueError("--do_train requires a train dataset")
         if "validation" not in tokenized_datasets and training_args.do_eval:
             raise ValueError("--do_eval requires a validation dataset")
+
         return tokenized_datasets
 
 
@@ -393,10 +451,12 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
     with training_args.main_process_first(desc="grouping texts together"):
-        saved_lm_datasets_fp = pathlib.Path(f"{training_args.data_dir}/lm_data.pt")
-        if saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
+        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+
+        if not data_args.overwrite_cache and saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
-            logger.info("✅ loaded lm_data")
+            logger.info(f"✅ loaded lm_data from {saved_lm_datasets_fp}")
         else:
             tokenized_datasets = preprocess_data(training_args, data_args, model_args, tokenizer)
             lm_datasets = tokenized_datasets.map(
@@ -407,29 +467,57 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
                 desc=f"Grouping texts in chunks of {block_size}",
             )
             torch.save(lm_datasets, saved_lm_datasets_fp)
-            logger.info("✅ saved lm_data")
+            logger.info(f"✅ saved lm_data to {saved_lm_datasets_fp}")
     return lm_datasets
 
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
-    #if "emb" in model_args.lang_adapt_strategies:
-    #    if "replace" in model_args.embedding_strategies:
-    #        for name, param in model.named_parameters():
-    #            if "wte" not in name and "wpe" not in name and "lm_head" not in name:
-    #                param.requires_grad = False
+    def get_adapter_config(adapter_args, model_args):
+        # modify here for new parameter efficient techniques associated with adapter-hub
+        if adapter_args.adapter_config == "prefix_tuning":
+            if model_args.adapter_placement == "all":
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
+                                                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
 
+        elif adapter_args.adapter_config == "lora":
+            adapter_config = LoRAConfig(
+                selfattn_lora = adapter_args.selfattn_lora,
+                intermediate_lora = adapter_args.intermediate_lora,
+                output_lora = adapter_args.output_lora, 
+                r = adapter_args.r_lora,
+                alpha = adapter_args.alpha_lora,
+                dropout = adapter_args.dropout_lora,
+                init_weights = adapter_args.init_weights_lora,
+            )
+        
+        else:
+            # TODO: confirm with Vassilina what goes into this condition
+            if model_args.adapter_placement == "all":
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor        
+                )
+            else:
+                adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
+                adapter_config = AdapterConfig.load(
+                    adapter_args.adapter_config,
+                    non_linearity=adapter_args.adapter_non_linearity,
+                    reduction_factor=adapter_args.adapter_reduction_factor,
+                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                )
+        return adapter_config
 
     # Setup adapters
     if adapter_args.train_adapter:
         task_name = data_args.dataset_name or "clm"
-        task_name += f"_{adapter_args.language}"
+        task_name += f"_{adapter_args.adapter_config}_{adapter_args.language}"
         # check if adapter already exists, otherwise add it
         if task_name not in model.config.adapters:
-            # resolve the adapter config
-            adapter_config = AdapterConfig.load(
-                adapter_args.adapter_config,
-                non_linearity=adapter_args.adapter_non_linearity,
-                reduction_factor=adapter_args.adapter_reduction_factor,
-            )
+            adapter_config = get_adapter_config(adapter_args, model_args)
             # load a pre-trained from Hub if specified
             if adapter_args.load_adapter:
                 model.load_adapter(
@@ -455,8 +543,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             )
         else:
             lang_adapter_name = None
+        
         # Freeze all model weights except of those of this adapter
         model.train_adapter(task_name, train_embeddings=True)
+        
         # Set the adapters to be used in every forward pass
         #if lang_adapter_name:
         #    model.set_active_adapters(ac.Stack(lang_adapter_name, task_name))
@@ -470,22 +560,78 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 "Use --train_adapter to enable adapter training"
             )
 
+    print(f"✅ Use Embedding Strategy: {model_args.embedding_strategies}")
+
     if model_args.embedding_strategies == "overlap-replace":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        model.add_embeddings('lng_emb', tokenizer, reference_embedding='default', reference_tokenizer=orig_tokenizer )
-        model._active_embedding = "lng_emb"
-        model.delete_embeddings('default')
+        else:
+            raise Exception("Same tokenizer so overlap-replace doesn't make sense.")
+        
+        if hasattr(model.transformer, "wte"):
+            # gpt-2
+            ref_embedding = model.transformer.wte
+        elif hasattr(model.transformer, "word_embeddings"):
+            # bloom
+            ref_embedding = model.transformer.word_embeddings
+        else:
+            raise Exception("Unsupported Model")
+
+        model.resize_token_embeddings(len(tokenizer))
+        overlap = set(tokenizer.vocab).intersection(set(orig_tokenizer.vocab))
+        print(f"{len(overlap)} tokens overlapped")
+        curr_vocab = tokenizer.vocab
+        orig_vocab = orig_tokenizer.vocab
+        for t in overlap:
+            if hasattr(model.transformer, "wte"):
+                model.transformer.wte.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            elif hasattr(model.transformer, "word_embeddings"):
+                model.transformer.word_embeddings.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
+            else:
+                raise Exception("Unsupported Model")
         model.tie_weights()
+
     elif model_args.embedding_strategies == "replace":
         model.resize_token_embeddings(len(tokenizer))
+        model.tie_weights()
+
+    elif model_args.embedding_strategies == "extend":
+        original_embedding_layer = model.get_input_embeddings()
+        original_vocab_size = original_embedding_layer.weight.shape[0]
+        print(f"Tokens for new languages: {len(tokenizer) - original_vocab_size}")
+        model.resize_token_embeddings(len(tokenizer))
+        model.tie_weights()
+        
+        embedding_layer = model.get_input_embeddings()
+        # erases gradients for the original embedding layer, without using extra CUDA memory
+        def zero_grad(grad):
+            grad[:original_vocab_size, :] = 0
+            return grad
+
+        embedding_layer.weight.register_hook(lambda grad: zero_grad(grad))
+
+    if model_args.reinit_weights:
+        print(f"❗️ Reinitialize model's weights")
+        model.init_weights()
+
     trainable_params = 0
     frozen_params = 0
     emb_params = 0
     for name, param in model.named_parameters():
-        if "wte" in name or "wpe" in name:
+        if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
             param.requires_grad = True
             emb_params += param.numel()
+        
+        elif model_args.lang_adapt_strategies is not None:
+            if model_args.lang_adapt_strategies == "emb":
+                param.requires_grad = False
+            elif model_args.lang_adapt_strategies == "bitfit":
+                if 'bias' not in name:
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
+            elif model_args.lang_adapt_strategies == "continual-pretrain":
+                param.requires_grad = True
 
         if not param.requires_grad:
             print(f"🥶 Frozen layer '{name}'")
@@ -493,9 +639,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         else:
             print(f"🚀 Trainable layer '{name}'")
             trainable_params += param.numel()
-         
-        if "wte" and "wpe" in name:
-            emb_params += param.numel()
 
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
@@ -506,7 +649,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, MultiLingAdapterArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, ParamEfficientArguments))
 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -516,9 +659,10 @@ def main():
         )
     else:
         model_args, data_args, training_args, adapter_args = parser.parse_args_into_dataclasses()
-        training_args.data_dir = f'{training_args.output_dir}'
+    
+    training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('emb', 'emb-and-adpt', 'emb-then-adpt')
+    assert model_args.lang_adapt_strategies in ('continual-pretrain', 'emb', 'madx', 'emb-then-adpt', 'lora', 'bitfit')
     assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
 
     # Setup logging
@@ -567,6 +711,7 @@ def main():
     tokenizer = load_tokenizer(model_args)
     model = load_model(model_args, tokenizer)
     modify_model(adapter_args, data_args, model_args, tokenizer, model)
+    
     # Preprocessing the datasets.
     lm_datasets = get_lm_dataset(training_args, data_args, model_args, tokenizer)
     if training_args.do_train:
@@ -574,6 +719,7 @@ def main():
 
     if training_args.do_eval:
         eval_dataset = lm_datasets["validation"]
+    
     # Initialize our Trainer
     trainer_class = AdapterTrainer if adapter_args.train_adapter else Trainer
     trainer = trainer_class(
@@ -589,6 +735,9 @@ def main():
     print("Model: 👇")
     print(model)
 
+    
+    # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
+    # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -601,8 +750,17 @@ def main():
         trainer.save_model()  # Saves the tokenizer too for easy upload # normally this part only saves the adapters? (TODO: check)
 
         # save embedding and positional embedding (which is not saved by trainer)
-        trainer.model.save_embeddings(trainer.args.output_dir, 'lng_emb')
-        torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/positional_embedding.pt')
+        
+        # This part is used if we use initial BS 1b3 model  (the one used for experiments reported in the paper)
+        if hasattr(trainer.model.transformer, "wte"):
+            torch.save(trainer.model.transformer.wte, f'{trainer.args.output_dir}/embedding_wte.pt') # for sanity check
+        if hasattr(trainer.model.transformer, "wpe"):
+            torch.save(trainer.model.transformer.wpe, f'{trainer.args.output_dir}/embedding_wpe.pt')
+        
+        # this part is used for BLOOM models
+        if hasattr(trainer.model.transformer, "word_embeddings"):
+            torch.save(trainer.model.transformer.word_embeddings, f'{trainer.args.output_dir}/word_embeddings.pt')
+            torch.save(trainer.model.transformer.word_embeddings_layernorm, f'{trainer.args.output_dir}/word_embeddings_layernorm.pt')
 
         metrics = train_result.metrics
 
@@ -614,6 +772,18 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+    
+    # uncomment to test whether extending vocab gradient masking is working correctly. 
+    # if model_args.embedding_strategies == "extend":
+    #     print("Unsliced, post-training:", model.get_input_embeddings().weight) # get updated weight
+    #     if not torch.equal(orig_embeddings[:250880, :], model.get_input_embeddings().weight[:250880, :]):
+    #         raise ValueError("embedding layer is updated where it shouldn't....")
+
+    #     if torch.equal(orig_embeddings[250880:, :], model.get_input_embeddings().weight[250880:, :]):
+    #         print("original embeddings:", orig_embeddings[250880:, :])
+    #         print("updated embeddings:", model.get_input_embeddings().weight[250880:, :])
+    #         raise ValueError("embedding layer is not updated where it should....")
+
 
     # Evaluation
     if training_args.do_eval:

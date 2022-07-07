@@ -2,6 +2,7 @@ import logging
 import argparse
 import os
 import json
+from tqdm import tqdm
 
 from datasets import load_dataset
 from datasets import load_metric
@@ -79,9 +80,15 @@ model_class_mapping = {
 trainer_no_task_adpt_class_mapping = {XNLI: Trainer, XLSUM: Seq2SeqTrainer, WIKIANN: Trainer}
 trainer_class_mapping = {XNLI: AdapterTrainer, XLSUM: Seq2SeqAdapterTrainer, WIKIANN: AdapterTrainer}
 trainer_args_mapping = {XNLI: TrainingArguments, XLSUM: Seq2SeqTrainingArguments, WIKIANN: TrainingArguments}
-task_eval_metric_best_model = {XNLI: 'eval_accuracy', WIKIANN: 'eval_overall_f1'}
+task_eval_metric_best_model = {XNLI: 'eval_accuracy', XLSUM: 'eval_loss', WIKIANN: 'eval_overall_f1'}
 
 args = parser.parse_args()
+
+# XLSUM
+XLSUM_INPUT_LEN = 512
+XLSUM_OUTPUT_LEN = 64
+XLSUM_NUM_BEAMS = 1
+XLSUM_LEN_PENALTY = 0.6
 
 #### Process args
 if not args.cross_lingual and not args.train_lang:
@@ -102,11 +109,11 @@ if args.dataset == XNLI:
 elif args.dataset == WIKIANN:
     optional_model_kwargs = {"num_labels": 7}
 elif args.dataset == XLSUM:
-    optional_trainer_args = {"generation_max_length": 512 + 64, 
+    optional_trainer_args = {"generation_max_length": XLSUM_INPUT_LEN + XLSUM_OUTPUT_LEN, 
                              "predict_with_generate":True,
                              "optim": "adafactor",
                              "lr_scheduler_type": "linear",
-                             "warmup_steps": 0}
+                             "warmup_ratio": 0.1}
 
 if args.local_rank:
     torch.cuda.set_device(args.local_rank)
@@ -161,11 +168,16 @@ logger.info(f"Loading tokenizer from {args.tokenizer}...")
 tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.sep_token is None:
+    tokenizer.sep_token = tokenizer.bos_token
 
 # TODO: we probably need better code for this than multiple if-else statements
 en_tokenizer = AutoTokenizer.from_pretrained(args.original_model, cache_dir=args.cache_dir, revision=args.revision, add_prefix_space=args.dataset in [WIKIANN])
 if en_tokenizer.pad_token is None:
     en_tokenizer.pad_token = en_tokenizer.eos_token
+if en_tokenizer.sep_token is None:
+    en_tokenizer.sep_token = en_tokenizer.bos_token
+    # en_tokenizer.add_special_tokens({'sep_token':'<|sep|>'})
 
 if args.dataset == XNLI:
     if tokenizer.eos_token is None:
@@ -184,30 +196,28 @@ elif args.dataset == XLSUM:
     # also, unlike enc-dec model, we cannot feed the model some text and expect the model to generate only summary 
     # we need to have input = [text] + [padding] and the output be [text] + [summary].
     def tokenize_function(example):
-        text = tokenizer(f'{example["text"]}', max_length=511, truncation=True)
-        # TODO: sep_token instead of bos_token
-        input_text = tokenizer.decode(text['input_ids'], skip_special_tokens=True) + tokenizer.bos_token
+        text = tokenizer(f'{example["text"]}', max_length=XLSUM_INPUT_LEN - 1, padding="max_length", truncation=True)
+        input_text = tokenizer.decode(text['input_ids'], skip_special_tokens=False) + tokenizer.sep_token
 
         with tokenizer.as_target_tokenizer():
-            summaries = tokenizer(f'{example["summary"]}', max_length=64, padding="max_length", truncation=True)
-            summaries_text = tokenizer.decode(summaries['input_ids'], skip_special_tokens=True)
+            summaries = tokenizer(f'{example["summary"]}', max_length=XLSUM_OUTPUT_LEN, padding="max_length", truncation=True)
+            summaries_text = tokenizer.decode(summaries['input_ids'], skip_special_tokens=False)
         
-        inputs = tokenizer(f'{input_text + summaries_text}', max_length=512 + 64, padding="max_length", truncation=True)
-        
+        inputs = tokenizer(f'{input_text + summaries_text}')
         inputs["labels"] = inputs["input_ids"]
 
         return inputs
 
-
     def en_tokenize_function(example):
-        inputs = en_tokenizer(f'{example["text"]}', max_length=512, padding="max_length", truncation=True)
+        ...
+        # inputs = en_tokenizer(f'{example["text"]}', max_length=512, padding="max_length", truncation=True)
 
-        with en_tokenizer.as_target_tokenizer():
-            summaries = en_tokenizer(f'{example["summary"]}', max_length=512, padding="max_length", truncation=True)
+        # with en_tokenizer.as_target_tokenizer():
+        #     summaries = en_tokenizer(f'{example["summary"]}', max_length=512, padding="max_length", truncation=True)
         
-        inputs["labels"] = summaries["input_ids"]
+        # inputs["labels"] = summaries["input_ids"]
 
-        return inputs
+        # return inputs
 
 elif args.dataset == WIKIANN:
     def tokenize_function(examples):
@@ -285,61 +295,34 @@ elif args.dataset == XLSUM:
     metric = load_metric('rouge')
     
     def compute_metrics(eval_preds):
-        # TODO: note that this function calls trainer.model
-        preds, labels = eval_preds
+        return {}
 
-        preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+    def compute_xlsum_beam_search_metrics(model, dataset):
+        # get input sentences
+        input_ids = torch.Tensor(dataset['input_ids']).type(torch.IntTensor)[:, :XLSUM_INPUT_LEN]
+        bsz = args.per_device_eval_batch_size
+
+        # get generated summaries
+        preds = list()
+        for i in tqdm(range(0, input_ids.shape[0], bsz), desc="Summarization task: generation"):
+            outputs = model.generate(input_ids[i:i+bsz], max_length=XLSUM_INPUT_LEN+XLSUM_OUTPUT_LEN, length_penalty=XLSUM_LEN_PENALTY, num_beams=XLSUM_NUM_BEAMS)
+            preds += tokenizer.batch_decode(outputs[:, XLSUM_INPUT_LEN:], skip_special_tokens=True)
+
+        # get gold summaries
+        labels = np.array(dataset['input_ids'])[:, XLSUM_INPUT_LEN:]
         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
         labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in preds]
-        labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
-        
-        result = metric.compute(predictions=preds, references=labels)
-        # TODO: need to confirm these are the right rouge values to report. Can report more ROUGE metrics if needed.
-        result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
-        
-        return {k: round(v, 4) for k, v in result.items()}
-
-    def compute_beam_search_metrics(model, dataset):
-        input_ids = torch.Tensor(dataset['input_ids']).type(torch.IntTensor)
-        model.cuda()
-        print(input_ids.shape)
-        print(model.device)
-
-        beam_scorer = BeamSearchScorer(
-            batch_size=2,
-            num_beams=4,
-            device=model.device,
-        )
-
-        # instantiate logits processors
-        logits_processor = LogitsProcessorList(
-            [
-                ForcedEOSTokenLogitsProcessor(512+64, eos_token_id=model.config.eos_token_id),
-            ]
-        )
-
-        preds = model.beam_search(input_ids[:2, :512].repeat_interleave(4, dim=0).cuda(), beam_scorer, logits_processor=logits_processor)
-        preds = tokenizer.batch_decode(preds)
         print(preds)
-        assert False
-        labels = np.array(dataset['input_ids'])[:2, 512:]
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        print(labels)
 
+        # compute ROUGE metrics
         preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in preds]
         labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
         result = metric.compute(predictions=preds, references=labels)
-        print(result)
-        # print(preds)
-        # labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        # labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
 
-        # preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in preds]
-        # labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in labels]
-        
-        # result = metric.compute(predictions=preds, references=labels)
+        return {k: round(v, 4) for k, v in result.items()}
 
 else:
     raise ValueError("Unknown dataset provided")
@@ -414,10 +397,12 @@ def load_model(args, inference=False):
                                                                       cache_dir=args.cache_dir,
                                                                       revision=args.revision,
                                                                       **optional_model_kwargs)
+        
         if not inference:
             model.add_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             model.train_adapter(f"{args.dataset.split('/')[-1]}-task-adapter")
             return model
+        
         else:
             print(f"[Evaluation] Load task adapters from {args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
             adapter_name = model.load_adapter(f"{args.pretrained_adapters_dir}/{args.dataset.split('/')[-1]}-task-adapter")
@@ -460,13 +445,14 @@ def load_model(args, inference=False):
             model = make_base_model_trainable(args, model, inference)
         return model
 
+    # load unadapted model
     model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
                                                               pad_token_id=pad_token_id,
                                                               cache_dir=args.cache_dir,
                                                               revision=args.revision,
                                                               **optional_model_kwargs)
                                                               
-    # adapted models
+    # load adapted model
     if not args.cross_lingual or inference:
         model = load_embedding_layers(args, tokenizer, model)
         if args.madx_lang_adapter:
@@ -534,32 +520,27 @@ if args.do_predict:
 
     if args.dataset == XLSUM:
         # use beam search to get the results following the XLSUM paper
-        compute_beam_search_metrics(model, test_dataset)
-        assert False
+        print(f"Evaluating on test set ({XLSUM})...")
+        result = compute_xlsum_beam_search_metrics(model, test_dataset)
+        print(result)
+    
+    else:
+        if model.active_adapters is None:
+            logger.info("No active adapters")
+            trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
+        else:
+            trainer_class = trainer_class_mapping[args.dataset]
 
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer,
+        eval_trainer = trainer_class(
             model=model,
-            label_pad_token_id=-100,
-            pad_to_multiple_of=8 if training_args.fp16 else None,
+            args=training_args,
+            eval_dataset=test_dataset,
+            compute_metrics=compute_metrics,
+            # args for xlsum only
+            **{"data_collator": data_collator} if args.dataset == XLSUM else {}
+
         )
 
-    if model.active_adapters is None:
-        logger.info("No active adapters")
-        trainer_class = trainer_no_task_adpt_class_mapping[args.dataset]
-    else:
-        trainer_class = trainer_class_mapping[args.dataset]
-
-    eval_trainer = trainer_class(
-        model=model,
-        args=training_args,
-        eval_dataset=test_dataset,
-        compute_metrics=compute_metrics,
-        # args for xlsum only
-        **{"data_collator": data_collator} if args.dataset == XLSUM else {}
-
-    )
-
-    print("Evaluating on test set...")
-    print(eval_trainer.evaluate())
+        print("Evaluating on test set...")
+        print(eval_trainer.evaluate())
 

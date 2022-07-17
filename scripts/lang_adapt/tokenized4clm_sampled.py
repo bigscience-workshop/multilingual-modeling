@@ -28,7 +28,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--lang', type=str, required=True)
 parser.add_argument('--model', type=str, required=True)
 parser.add_argument('--tokenizer_dir', type=str, required=True)
-parser.add_argument('--tok_strategy', type=str, choices=["replace", "extend", "overlap-replace"] ,required=True)
+parser.add_argument('--tok_strategy', type=str, choices=["replace", "extend", "overlap-replace", "overlap-replace-breakdown"],
+                    required=True)
 parser.add_argument('--hf_cache_dir', default="~/.cache/huggingface/transformers", type=str)
 parser.add_argument('--vocab_size', default=24_000, type=int)
 parser.add_argument('--sample_size', default=100_000, type=int)
@@ -77,7 +78,7 @@ if args.tok_strategy == 'extend':
     tokenizer.save_pretrained(f"{args.tokenizer_dir}")
     print(f"Saved tokenizer to {args.tokenizer_dir}")
 
-elif args.tok_strategy in ('replace', 'overlap-replace'):
+elif args.tok_strategy in ('replace', 'overlap-replace', 'overlap-replace-breakdown'):
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_auth_token=args.use_auth_token)
     assert tokenizer.is_fast
     new_tokenizer = tokenizer.train_new_from_iterator(batch_iterator(), vocab_size=args.vocab_size)

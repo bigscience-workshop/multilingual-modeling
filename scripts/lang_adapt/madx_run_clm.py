@@ -103,10 +103,6 @@ class ModelArguments:
             "with private models)."
         },
     )
-    reinit_weights: bool = field(
-        default=False,
-        metadata={"help": "choose one of the three strategies - 'emb', 'emb-and-adpt', 'emb-then-adpt'"},
-    )
     lang_adapt_strategies: str = field(
         default=None,
         metadata={"help": "language adaptation strategies"},
@@ -562,7 +558,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
 
     print(f"✅ Use Embedding Strategy: {model_args.embedding_strategies}")
 
-    if model_args.embedding_strategies == "overlap-replace":
+    if model_args.embedding_strategies == "overlap-replace" or model_args.embedding_strategies == "overlap-replace-breakdown":
         if not tokenizer.name_or_path == model_args.model_name_or_path:
             orig_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
         else:
@@ -589,6 +585,22 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 model.transformer.word_embeddings.weight.data[curr_vocab[t]] = ref_embedding.weight[orig_vocab[t]]
             else:
                 raise Exception("Unsupported Model")
+        
+        # handling breakdown case
+        if model_args.embedding_strategies == "overlap-replace-breakdown":
+            not_overlap = set(tokenizer.vocab).difference(overlap)
+            print(f"{len(not_overlap)} non-overlapped token to breakdown")
+            for t in not_overlap:
+                subtoken = orig_tokenizer.tokenize(t)
+                merged_weight = sum([ref_embedding.weight[orig_vocab[st]] for st in subtoken]) / len(subtoken)
+
+                if hasattr(model.transformer, "wte"):
+                    model.transformer.wte.weight.data[curr_vocab[t]] = merged_weight
+                elif hasattr(model.transformer, "word_embeddings"):
+                    model.transformer.word_embeddings.weight.data[curr_vocab[t]] = merged_weight
+                else:
+                    raise Exception("Unsupported Model")
+
         model.tie_weights()
 
     elif model_args.embedding_strategies == "replace":
@@ -609,8 +621,11 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             return grad
 
         embedding_layer.weight.register_hook(lambda grad: zero_grad(grad))
+    
+    elif model_args.embedding_strategies == "original":
+        pass # do nothing.
 
-    if model_args.reinit_weights:
+    if "reinit" in model_args.lang_adapt_strategies:
         print(f"❗️ Reinitialize model's weights")
         model.init_weights()
 
@@ -630,7 +645,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                     param.requires_grad = False
                 else:
                     param.requires_grad = True
-            elif model_args.lang_adapt_strategies == "continual-pretrain":
+            elif "continual-pretrain" in model_args.lang_adapt_strategies:
                 param.requires_grad = True
 
         if not param.requires_grad:
@@ -662,8 +677,8 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ('continual-pretrain', 'emb', 'madx', 'emb-then-adpt', 'lora', 'bitfit')
-    assert model_args.embedding_strategies in ('replace', 'extend', 'overlap-replace')
+    assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", "emb", "madx", "emb-then-adpt", "lora", "bitfit", "aa")
+    assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original")
 
     # Setup logging
     logging.basicConfig(

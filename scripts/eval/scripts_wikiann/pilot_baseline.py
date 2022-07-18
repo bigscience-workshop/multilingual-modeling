@@ -4,7 +4,7 @@ import json
 
 from transformers import set_seed
 
-set_seed(42)
+import torch
 
 import sys
 from loguru import logger
@@ -28,8 +28,8 @@ train_dataset = dataset["train"]
 val_dataset = dataset["validation"]
 test_dataset = dataset["test"]
 
-tok = "/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_bloom-1b3_my_oscar_100000samples_24000vocab_overlap-replace"
-model_name = "/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_my_madx_100000samples_24000vocab_overlap-replace"
+tok = "/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_bloom-1b3_my_oscar_100000samples_24000vocab_extend"
+model_name = "/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_my_bitfit_100000samples_24000vocab_extend"
 # tok = model_name = 'bigscience/bloom-1b3'
 # tok = model_name = 'sberbank-ai/mGPT'
 # tok = model_name = 'bert-base-multilingual-cased'
@@ -104,25 +104,35 @@ def print_model_trainable_layers(model):
             print(f"🚀 Trainable layer '{name}'")
 
 scores = list()
-for _ in range(3):
+for seed in range(2):
+    set_seed(seed)
+    
     if "madx" in model_name:
-        model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
-                                                                pad_token_id=tokenizer.pad_token_id,
-                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
-                                                                num_labels=7)
-        model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-        model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    num_labels=7)
+            model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
+
+            model.add_adapter(f"xlsum-task-adapter")
+            model.train_adapter(f"xlsum-task-adapter")
+            print_model_trainable_layers(model)
+            return model
     else:
-        model = AutoModelForTokenClassification.from_pretrained(model_name, 
-                                                                pad_token_id=tokenizer.pad_token_id,
-                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
-                                                                num_labels=7)
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(model_name, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    num_labels=7)
+
+            model.add_adapter(f"xlsum-task-adapter")
+            model.train_adapter(f"xlsum-task-adapter")
+            print_model_trainable_layers(model)
+            return model
 
     # model.freeze_model(True)
-    
-    model.add_adapter(f"xlsum-task-adapter")
-    model.train_adapter(f"xlsum-task-adapter")
-    print_model_trainable_layers(model)
 
     training_args = TrainingArguments(
         output_dir=f"/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/pilot/{language}",
@@ -146,7 +156,7 @@ for _ in range(3):
     )
 
     trainer = AdapterTrainer(
-        model=model,
+        model_init=model_init,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
@@ -155,29 +165,36 @@ for _ in range(3):
 
     trainer.train()
 
-    if "madx" in model_name:
-        model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
-                                                                pad_token_id=tokenizer.pad_token_id,
-                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
-                                                                num_labels=7)
-        model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-        model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
-    else:
-        model = AutoModelForTokenClassification.from_pretrained(model_name, 
-                                                                pad_token_id=tokenizer.pad_token_id,
-                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
-                                                                num_labels=7)
-
     with open(f"/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/pilot/{language}/checkpoint-15/trainer_state.json") as rf:
         checkpoint = json.load(rf)['best_model_checkpoint']
         print(checkpoint)
 
-    model.load_adapter(f"{checkpoint}/xlsum-task-adapter")
-    model.set_active_adapters("xlsum-task-adapter")
-    model.eval()
+    if "madx" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    num_labels=7)
+            model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
 
+            model.load_adapter(f"{checkpoint}/xlsum-task-adapter")
+            model.set_active_adapters("xlsum-task-adapter")
+            model.eval()
+            return model
+    else:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(model_name, 
+                                                                pad_token_id=tokenizer.pad_token_id,
+                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                num_labels=7)
+            model.load_adapter(f"{checkpoint}/xlsum-task-adapter")
+            model.set_active_adapters("xlsum-task-adapter")
+            model.eval()
+            return model
+    
     eval_trainer = AdapterTrainer(
-        model=model,
+        model_init=model_init,
         args=training_args,
         eval_dataset=test_dataset,
         compute_metrics=compute_metrics,
@@ -186,6 +203,8 @@ for _ in range(3):
     res = eval_trainer.evaluate()
     print("Eval on Test set:", res)
     scores.append(res['eval_overall_f1'])
+
+    torch.cuda.empty_cache()
 
 print("Model:", model_name)
 print(scores)

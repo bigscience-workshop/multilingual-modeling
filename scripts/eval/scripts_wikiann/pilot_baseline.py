@@ -19,23 +19,25 @@ from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenc
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--lang", type=str)
+parser.add_argument("--cache_dir", type=str, default="/users/zyong2/data/zyong2/huggingface")
+parser.add_argument("--output_dir", type=str)
 args = parser.parse_args()
 
 language = args.lang
-dataset = load_dataset("wikiann", language, cache_dir="/users/zyong2/data/zyong2/huggingface")
+dataset = load_dataset("wikiann", language, cache_dir=args.cache_dir)
 
 train_dataset = dataset["train"]
 val_dataset = dataset["validation"]
 test_dataset = dataset["test"]
 
-tok = "/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_bloom-1b3_my_oscar_100000samples_24000vocab_extend"
-model_name = "/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_my_bitfit_100000samples_24000vocab_extend"
-# tok = model_name = 'bigscience/bloom-1b3'
+# tok = "/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_bloom-1b3_my_oscar_100000samples_24000vocab_extend"
+# model_name = "/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_my_bitfit_100000samples_24000vocab_extend"
+tok = model_name = 'bigscience/bloom-1b3'
 # tok = model_name = 'sberbank-ai/mGPT'
 # tok = model_name = 'bert-base-multilingual-cased'
 # tok = model_name = 'xlm-roberta-large'
 
-tokenizer = AutoTokenizer.from_pretrained(tok, cache_dir="/users/zyong2/data/zyong2/huggingface", add_prefix_space=True)
+tokenizer = AutoTokenizer.from_pretrained(tok, cache_dir=args.cache_dir, add_prefix_space=True)
 if not tokenizer.pad_token:
     if 'mGPT' in model_name:
         tokenizer.pad_token = '<pad>' #mGPT 
@@ -111,31 +113,31 @@ for seed in range(2):
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
                                                                     pad_token_id=tokenizer.pad_token_id,
-                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    cache_dir=args.cache_dir,
                                                                     num_labels=7)
             model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
             model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
 
-            model.add_adapter(f"xlsum-task-adapter")
-            model.train_adapter(f"xlsum-task-adapter")
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
     else:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(model_name, 
                                                                     pad_token_id=tokenizer.pad_token_id,
-                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    cache_dir=args.cache_dir,
                                                                     num_labels=7)
 
-            model.add_adapter(f"xlsum-task-adapter")
-            model.train_adapter(f"xlsum-task-adapter")
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
 
     # model.freeze_model(True)
 
     training_args = TrainingArguments(
-        output_dir=f"/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/pilot/{language}",
+        output_dir=args.output_dir,
         overwrite_output_dir=True,
         do_train=True,
         do_eval=True,
@@ -150,7 +152,6 @@ for seed in range(2):
         logging_strategy="epoch",
         logging_steps=500,
         report_to="tensorboard",
-        logging_dir=f"/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/pilot/{language}/logs",
         load_best_model_at_end=True, # will load the last saved **model** checkpoint, so will cause problem for adapters.
         metric_for_best_model='eval_overall_f1'
     )
@@ -165,7 +166,7 @@ for seed in range(2):
 
     trainer.train()
 
-    with open(f"/users/zyong2/data/zyong2/bigscience/data/processed/021-wikiann/pilot/{language}/checkpoint-15/trainer_state.json") as rf:
+    with open(f"{args.output_dir}/checkpoint-15/trainer_state.json") as rf:
         checkpoint = json.load(rf)['best_model_checkpoint']
         print(checkpoint)
 
@@ -173,23 +174,23 @@ for seed in range(2):
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
                                                                     pad_token_id=tokenizer.pad_token_id,
-                                                                    cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                    cache_dir=args.cache_dir,
                                                                     num_labels=7)
             model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
             model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
 
-            model.load_adapter(f"{checkpoint}/xlsum-task-adapter")
-            model.set_active_adapters("xlsum-task-adapter")
+            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters("wikiann-task-adapter")
             model.eval()
             return model
     else:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(model_name, 
                                                                 pad_token_id=tokenizer.pad_token_id,
-                                                                cache_dir="/users/zyong2/data/zyong2/huggingface",
+                                                                cache_dir=args.cache_dir,
                                                                 num_labels=7)
-            model.load_adapter(f"{checkpoint}/xlsum-task-adapter")
-            model.set_active_adapters("xlsum-task-adapter")
+            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters("wikiann-task-adapter")
             model.eval()
             return model
     

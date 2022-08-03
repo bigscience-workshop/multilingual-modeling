@@ -23,6 +23,7 @@ parser.add_argument("--cache_dir", type=str, default="/users/zyong2/data/zyong2/
 parser.add_argument("--output_dir", type=str)
 parser.add_argument("--tokenizer", type=str)
 parser.add_argument("--model_name", type=str)
+parser.add_argument("--base_model", type=str, default="bigscience/bloom-1b3")
 args = parser.parse_args()
 
 language = args.lang
@@ -34,7 +35,7 @@ test_dataset = dataset["test"]
 
 tok = args.tokenizer
 model_name = args.model_name
-base_model = "sberbank-ai/mGPT"
+base_model = args.base_model
 
 tokenizer = AutoTokenizer.from_pretrained(tok, cache_dir=args.cache_dir, add_prefix_space=True)
 if not tokenizer.pad_token:

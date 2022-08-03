@@ -7,7 +7,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 import torch
 import pathlib 
@@ -227,6 +227,38 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
         default='lora',
         metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
     )
+
+    # prefix tuning
+    encoder_prefix: bool = field(
+        default=True,
+        metadata={"help": "If True, add prefixes to the encoder of an encoder-decoder model."},
+    )
+    cross_prefix: bool = field(
+        default=True,
+        metadata={"help": "If True, add prefixes to the cross attention of an encoder-decoder model."},
+    )
+    flat: bool = field(
+        default=False,
+        metadata={"help": "If True, train the prefix parameters directly. Otherwise, reparametrize using a bottleneck MLP."},
+    )
+    prefix_length: int = field(
+        default=30,
+        metadata={"help": "The length of prefix."},
+    )
+    bottleneck_size: Optional[int] = field(
+        default=512,
+        metadata={"help": "If flat=False, the size of the bottleneck MLP."},
+    )
+    non_linearity: Optional[str] = field(
+        default="tanh",
+        metadata={"help": "If flat=False, the non-linearity used in the bottleneck MLP."},
+    )
+    prefix_dropout: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    # leave_out: Optional[List]
+
 
 def load_tokenizer(model_args):
     tokenizer_kwargs = {
@@ -470,12 +502,35 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     def get_adapter_config(adapter_args, model_args):
         # modify here for new parameter efficient techniques associated with adapter-hub
         if adapter_args.adapter_config == "prefix_tuning":
+            if model_args.lang_adapt_strategies == "prefix_tuning_flat":
+                assert adapter_args.flat is True
+            else:
+                assert adapter_args.flat is False
+            
+            if model_args == "prompt_tuning":
+                assert model_args.adapter_placement == "0"
+
             if model_args.adapter_placement == "all":
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800)
+                adapter_config = PrefixTuningConfig(
+                    encoder_prefix = adapter_args.encoder_prefix,
+                    cross_prefix = adapter_args.cross_prefix,
+                    flat = adapter_args.flat,
+                    prefix_length = adapter_args.prefix_length,
+                    bottleneck_size = adapter_args.bottleneck_size,
+                    non_linearity = adapter_args.non_linearity,
+                    dropout = adapter_args.prefix_dropout
+                )
             else:
                 adapters2use = set([int(i) for i in model_args.adapter_placement.split(",")])
-                adapter_config = PrefixTuningConfig(bottleneck_size = 800, 
-                                                    leave_out = [i for i in range(0,24) if not i in adapters2use]
+                adapter_config = PrefixTuningConfig(
+                    leave_out = [i for i in range(0,24) if not i in adapters2use],
+                    encoder_prefix = adapter_args.encoder_prefix,
+                    cross_prefix = adapter_args.cross_prefix,
+                    flat = adapter_args.flat,
+                    prefix_length = adapter_args.prefix_length,
+                    bottleneck_size = adapter_args.bottleneck_size,
+                    non_linearity = adapter_args.non_linearity,
+                    dropout = adapter_args.prefix_dropout
                 )
 
         elif adapter_args.adapter_config == "lora":
@@ -507,6 +562,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 )
         return adapter_config
 
+
+    print(f"✅ Use Adaptation Strategy: {model_args.lang_adapt_strategies}")
+    
     # Setup adapters
     if adapter_args.train_adapter:
         task_name = data_args.dataset_name or "clm"
@@ -634,7 +692,10 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     emb_params = 0
     for name, param in model.named_parameters():
         if "word_embeddings" in name or "wte" in name or "wpe" in name or "lm_head" in name:
-            param.requires_grad = True
+            if model_args.embedding_strategies == "original-frozen":
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
             emb_params += param.numel()
         
         elif model_args.lang_adapt_strategies is not None:
@@ -677,8 +738,11 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
-    assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", "emb", "madx", "emb-then-adpt", "lora", "bitfit", "aa")
-    assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original")
+    assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", 
+                                                "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
+                                                "prefix_tuning", "prefix_tuning_flat", "prompt_tuning",
+                                                "lora", "bitfit", "aa")
+    assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
 
     # Setup logging
     logging.basicConfig(

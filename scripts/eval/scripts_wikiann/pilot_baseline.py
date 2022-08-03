@@ -21,6 +21,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--lang", type=str)
 parser.add_argument("--cache_dir", type=str, default="/users/zyong2/data/zyong2/huggingface")
 parser.add_argument("--output_dir", type=str)
+parser.add_argument("--tokenizer", type=str)
+parser.add_argument("--model_name", type=str)
 args = parser.parse_args()
 
 language = args.lang
@@ -30,12 +32,9 @@ train_dataset = dataset["train"]
 val_dataset = dataset["validation"]
 test_dataset = dataset["test"]
 
-# tok = "/users/zyong2/data/zyong2/bigscience/data/processed/020/tok_bloom-1b3_my_oscar_100000samples_24000vocab_extend"
-# model_name = "/users/zyong2/data/zyong2/bigscience/data/processed/020/bloom-1b3_my_bitfit_100000samples_24000vocab_extend"
-tok = model_name = 'bigscience/bloom-1b3'
-# tok = model_name = 'sberbank-ai/mGPT'
-# tok = model_name = 'bert-base-multilingual-cased'
-# tok = model_name = 'xlm-roberta-large'
+tok = args.tokenizer
+model_name = args.model_name
+base_model = "sberbank-ai/mGPT"
 
 tokenizer = AutoTokenizer.from_pretrained(tok, cache_dir=args.cache_dir, add_prefix_space=True)
 if not tokenizer.pad_token:
@@ -109,14 +108,53 @@ scores = list()
 for seed in range(2):
     set_seed(seed)
     
-    if "madx" in model_name:
+    if "_pfeiffer_" in model_name:
         def model_init():
-            model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-            model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
+            print_model_trainable_layers(model)
+            return model
+    elif "_pfeiffer+inv_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
+            print_model_trainable_layers(model)
+            return model
+    elif "_lora_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
+            print_model_trainable_layers(model)
+            return model
+    elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
 
             model.add_adapter(f"wikiann-task-adapter")
             model.train_adapter(f"wikiann-task-adapter")
@@ -170,14 +208,53 @@ for seed in range(2):
         checkpoint = json.load(rf)['best_model_checkpoint']
         print(checkpoint)
 
-    if "madx" in model_name:
+    if "_pfeiffer_" in model_name:
         def model_init():
-            model = AutoModelForTokenClassification.from_pretrained('bigscience/bloom-1b3', 
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            model.add_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-            model.set_active_adapters(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters("wikiann-task-adapter")
+            model.eval()
+            return model
+    elif "_pfeiffer+inv_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters("wikiann-task-adapter")
+            model.eval()
+            return model
+    elif "_lora_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
+
+            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters("wikiann-task-adapter")
+            model.eval()
+            return model
+    elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
+            model.set_active_adapters(pretrained_adapter_name)
 
             model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
             model.set_active_adapters("wikiann-task-adapter")

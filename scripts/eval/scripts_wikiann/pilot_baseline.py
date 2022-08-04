@@ -24,6 +24,7 @@ parser.add_argument("--output_dir", type=str)
 parser.add_argument("--tokenizer", type=str)
 parser.add_argument("--model_name", type=str)
 parser.add_argument("--base_model", type=str, default="bigscience/bloom-1b3")
+parser.add_argument("--local_rank", type=int, default=-1)
 args = parser.parse_args()
 
 language = args.lang
@@ -192,7 +193,8 @@ for seed in range(2):
         logging_steps=500,
         report_to="tensorboard",
         load_best_model_at_end=True, # will load the last saved **model** checkpoint, so will cause problem for adapters.
-        metric_for_best_model='eval_overall_f1'
+        metric_for_best_model='eval_overall_f1',
+        local_rank=args.local_rank
     )
 
     trainer = AdapterTrainer(

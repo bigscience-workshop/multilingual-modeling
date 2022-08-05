@@ -1,6 +1,7 @@
 import numpy as np
 import collections
 import json
+import pathlib
 
 from transformers import set_seed
 
@@ -203,9 +204,11 @@ for seed in range(2):
         compute_metrics=compute_metrics,
     )
 
-    trainer.train()
+    # trainer.train()
 
-    with open(f"{args.output_dir}/checkpoint-15/trainer_state.json") as rf:
+    checkpoints_dir = list(pathlib.Path(f"{args.output_dir}/").glob("checkpoint-*"))
+    checkpoints_dir.sort(key=lambda fp: int(fp.name.split('-')[-1]))
+    with open(checkpoints_dir[-1] / "trainer_state.json") as rf:
         checkpoint = json.load(rf)['best_model_checkpoint']
         print(checkpoint)
 

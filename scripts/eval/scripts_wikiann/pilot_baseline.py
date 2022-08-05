@@ -26,6 +26,8 @@ parser.add_argument("--tokenizer", type=str)
 parser.add_argument("--model_name", type=str)
 parser.add_argument("--base_model", type=str, default="bigscience/bloom-1b3")
 parser.add_argument("--local_rank", type=int, default=-1)
+parser.add_argument("--reproducible", action="store_true")
+parser.add_argument("--seed_runs", type=int, default=3)
 args = parser.parse_args()
 
 language = args.lang
@@ -108,7 +110,7 @@ def print_model_trainable_layers(model):
             print(f"🚀 Trainable layer '{name}'")
 
 scores = list()
-for seed in range(2):
+for seed in range(args.seed_runs):
     set_seed(seed)
     
     if "_pfeiffer_" in model_name:
@@ -197,16 +199,26 @@ for seed in range(2):
         metric_for_best_model='eval_overall_f1',
         local_rank=args.local_rank
     )
+    if args.reproducible:
+        trainer = AdapterTrainer(
+            model_init=model_init,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            compute_metrics=compute_metrics,
+        )
+    else:
+        model = model_init()
+        trainer = AdapterTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            compute_metrics=compute_metrics,
+        )
+        
 
-    trainer = AdapterTrainer(
-        model_init=model_init,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        compute_metrics=compute_metrics,
-    )
-
-    # trainer.train()
+    trainer.train()
 
     checkpoints_dir = list(pathlib.Path(f"{args.output_dir}/").glob("checkpoint-*"))
     checkpoints_dir.sort(key=lambda fp: int(fp.name.split('-')[-1]))

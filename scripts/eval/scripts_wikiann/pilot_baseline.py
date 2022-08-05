@@ -206,7 +206,7 @@ for seed in range(2):
         compute_metrics=compute_metrics,
     )
 
-    # trainer.train()
+    trainer.train()
 
     checkpoints_dir = list(pathlib.Path(f"{args.output_dir}/").glob("checkpoint-*"))
     checkpoints_dir.sort(key=lambda fp: int(fp.name.split('-')[-1]))

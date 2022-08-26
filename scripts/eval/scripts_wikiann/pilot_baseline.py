@@ -2,6 +2,7 @@ import numpy as np
 import collections
 import json
 import pathlib
+import gc
 
 from transformers import set_seed
 
@@ -16,6 +17,8 @@ from datasets import load_metric
 from datasets import load_dataset
 from transformers import TrainingArguments, Trainer, Seq2SeqTrainer, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
 from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoModelForTokenClassification
+from transformers.adapters.composition import Stack
+
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -27,7 +30,7 @@ parser.add_argument("--model_name", type=str)
 parser.add_argument("--base_model", type=str, default="bigscience/bloom-1b3")
 parser.add_argument("--local_rank", type=int, default=-1)
 parser.add_argument("--reproducible", action="store_true")
-parser.add_argument("--seed_runs", type=int, default=3)
+parser.add_argument("--seed_runs", type=int, default=10)
 args = parser.parse_args()
 
 language = args.lang
@@ -69,7 +72,7 @@ train_dataset = train_dataset.map(tokenize_function, batched=False)
 val_dataset = val_dataset.map(tokenize_function, batched=False)
 test_dataset = test_dataset.map(tokenize_function, batched=False)
 
-metric = load_metric("seqeval")
+metric = load_metric("seqeval", experiment_id=model_name.replace("/", "_"))  # add experiment_id to prevent conflicting access
 idx2labelname = {i: label for i, label in enumerate(dataset["train"].features[f"ner_tags"].feature.names)}
 def compute_metrics(eval_pred):
     logits, golds = eval_pred
@@ -108,6 +111,10 @@ def print_model_trainable_layers(model):
             print(f"🥶 Frozen layer '{name}'")
         else:
             print(f"🚀 Trainable layer '{name}'")
+        
+        print(param)
+    
+    print(model)
 
 scores = list()
 for seed in range(args.seed_runs):
@@ -120,10 +127,10 @@ for seed in range(args.seed_runs):
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
 
             model.add_adapter(f"wikiann-task-adapter")
             model.train_adapter(f"wikiann-task-adapter")
+            model.active_adapters = Stack(pretrained_adapter_name, f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
     elif "_pfeiffer+inv_" in model_name:
@@ -133,10 +140,10 @@ for seed in range(args.seed_runs):
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
 
             model.add_adapter(f"wikiann-task-adapter")
             model.train_adapter(f"wikiann-task-adapter")
+            model.active_adapters = Stack(pretrained_adapter_name, f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
     elif "_lora_" in model_name:
@@ -217,7 +224,7 @@ for seed in range(args.seed_runs):
             compute_metrics=compute_metrics,
         )
         
-
+    
     trainer.train()
 
     checkpoints_dir = list(pathlib.Path(f"{args.output_dir}/").glob("checkpoint-*"))
@@ -233,11 +240,12 @@ for seed in range(args.seed_runs):
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
 
-            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
-            model.set_active_adapters("wikiann-task-adapter")
+            model.active_adapters = Stack(pretrained_adapter_name, task_adapter_name)
             model.eval()
+
+            print_model_trainable_layers(model)
             return model
     elif "_pfeiffer+inv_" in model_name:
         def model_init():
@@ -246,11 +254,12 @@ for seed in range(args.seed_runs):
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
 
-            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
-            model.set_active_adapters("wikiann-task-adapter")
+            model.active_adapters = Stack(pretrained_adapter_name, task_adapter_name)
             model.eval()
+
+            print_model_trainable_layers(model)
             return model
     elif "_lora_" in model_name:
         def model_init():
@@ -260,10 +269,11 @@ for seed in range(args.seed_runs):
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
             model.set_active_adapters(pretrained_adapter_name)
-
-            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
-            model.set_active_adapters("wikiann-task-adapter")
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters(task_adapter_name)
             model.eval()
+
+            print_model_trainable_layers(model)
             return model
     elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
         def model_init():
@@ -273,10 +283,11 @@ for seed in range(args.seed_runs):
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
             model.set_active_adapters(pretrained_adapter_name)
-
-            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
-            model.set_active_adapters("wikiann-task-adapter")
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters(task_adapter_name)
             model.eval()
+
+            print_model_trainable_layers(model)
             return model
     else:
         def model_init():
@@ -284,9 +295,11 @@ for seed in range(args.seed_runs):
                                                                 pad_token_id=tokenizer.pad_token_id,
                                                                 cache_dir=args.cache_dir,
                                                                 num_labels=7)
-            model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
-            model.set_active_adapters("wikiann-task-adapter")
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            model.set_active_adapters(task_adapter_name)
             model.eval()
+
+            print_model_trainable_layers(model)
             return model
     
     eval_trainer = AdapterTrainer(
@@ -300,9 +313,39 @@ for seed in range(args.seed_runs):
     print("Eval on Test set:", res)
     scores.append(res['eval_overall_f1'])
 
+    # clear CUDA memory: https://github.com/huggingface/transformers/issues/1742
+    if not args.reproducible:
+        del model
+    del trainer
+    del eval_trainer
+    gc.collect()
     torch.cuda.empty_cache()
 
+
+print("="*50)
+print("Results")
+print("="*50)
 print("Model:", model_name)
 print(scores)
 print(np.mean(scores) * 100)
 print(np.std(scores) * 100)
+print("="*50)
+
+
+# writing results to the model name.
+with open(f"{model_name}/wikiann-results.txt", "w+") as wf:
+    wf.write("="*50)
+    wf.write('\n')
+    wf.write("Results")
+    wf.write('\n')
+    wf.write("="*50)
+    wf.write('\n')
+    wf.write(f"Model: {model_name}")
+    wf.write('\n')
+    wf.write(f"{scores}")
+    wf.write('\n')
+    wf.write(f"{np.mean(scores) * 100:.2f}")
+    wf.write('\n')
+    wf.write(f"{np.std(scores) * 100:.2f}")
+    wf.write('\n')
+    wf.write("="*50)

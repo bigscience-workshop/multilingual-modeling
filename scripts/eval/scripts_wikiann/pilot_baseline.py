@@ -18,6 +18,7 @@ from datasets import load_dataset
 from transformers import TrainingArguments, Trainer, Seq2SeqTrainer, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
 from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoModelForTokenClassification
 from transformers.adapters.composition import Stack
+from transformers import AdapterConfig, LoRAConfig, PrefixTuningConfig, ConfigUnion
 
 
 import argparse
@@ -43,6 +44,8 @@ test_dataset = dataset["test"]
 tok = args.tokenizer
 model_name = args.model_name
 base_model = args.base_model
+
+
 
 tokenizer = AutoTokenizer.from_pretrained(tok, cache_dir=args.cache_dir, add_prefix_space=True)
 if not tokenizer.pad_token:
@@ -116,6 +119,37 @@ def print_model_trainable_layers(model):
     
     print(model)
 
+
+task_config_dict = {
+    "adapter_residual_before_ln": False,
+    "cross_adapter": False,
+    "factorized_phm_W": True,
+    "factorized_phm_rule": False,
+    "hypercomplex_nonlinearity": "glorot-uniform",
+    "init_weights": "bert",
+    "is_parallel": False,
+    "learn_phm": True,
+    "leave_out": [],
+    "ln_after": False,
+    "ln_before": False,
+    "mh_adapter": False,
+    "non_linearity": "relu",
+    "original_ln_after": True,
+    "original_ln_before": True,
+    "output_adapter": True,
+    "phm_bias": True,
+    "phm_c_init": "normal",
+    "phm_dim": 4,
+    "phm_init_range": 0.0001,
+    "phm_layer": False,
+    "phm_rank": 1,
+    "reduction_factor": 16,
+    "residual_before_ln": True,
+    "scaling": 1.0,
+    "shared_W_phm": False,
+    "shared_phm_rule": True
+}
+
 scores = list()
 for seed in range(args.seed_runs):
     set_seed(seed)
@@ -152,11 +186,42 @@ for seed in range(args.seed_runs):
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
+            with open(f"{model_name}/oscar_lora_{language}/adapter_config.json") as rf:
+                lora_config_dict = json.load(rf)['config']
 
-            model.add_adapter(f"wikiann-task-adapter")
-            model.train_adapter(f"wikiann-task-adapter")
+            config = ConfigUnion(
+                LoRAConfig.from_dict(lora_config_dict),
+                AdapterConfig.from_dict(task_config_dict)
+            )
+
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+            pretrained_adapter_modules = model.get_adapter(pretrained_adapter_name)
+            cached_weights = {}
+            for layer_i, v in pretrained_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in pretrained_adapter_modules[layer_i][layer_name].named_parameters():
+                        cached_weights[f"{layer_i}-{layer_name}-{name}"] = param.data
+            model.delete_adapter(pretrained_adapter_name)
+
+            model.add_adapter("wikiann_union_adapter", config=config)
+            model.train_adapter("wikiann_union_adapter")
+            union_adapter_modules = model.get_adapter("wikiann_union_adapter")
+            for layer_i, v in union_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in union_adapter_modules[layer_i][layer_name].named_parameters():
+                        if f"{layer_i}-{layer_name}-{name}" in cached_weights:
+                            # print(f"Replacing {layer_i}-{layer_name}-{name}")
+                            param.data = cached_weights[f"{layer_i}-{layer_name}-{name}"]
+                            param.requires_grad = False
+
+            # pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+            # model.set_active_adapters(pretrained_adapter_name)
+            # for name, param in model.get_adapter(pretrained_adapter_name)[0]['selfattn_lora'].named_parameters():
+            #     print(name)
+            #     print(param)
+
+            # model.add_adapter(f"wikiann-task-adapter")
+            # model.train_adapter(f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
     elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
@@ -165,12 +230,38 @@ for seed in range(args.seed_runs):
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
+            with open(f"{model_name}/oscar_prefix_tuning_{language}/adapter_config.json") as rf:
+                prefix_tuning_config_dict = json.load(rf)['config']
 
-            model.add_adapter(f"wikiann-task-adapter")
-            model.train_adapter(f"wikiann-task-adapter")
+            config = ConfigUnion(
+                PrefixTuningConfig.from_dict(prefix_tuning_config_dict),
+                AdapterConfig.from_dict(task_config_dict)
+            )
+
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
+            pretrained_adapter_modules = model.get_adapter(pretrained_adapter_name)
+            cached_weights = {}
+            for layer_i, v in pretrained_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in pretrained_adapter_modules[layer_i][layer_name].named_parameters():
+                        cached_weights[f"{layer_i}-{layer_name}-{name}"] = param.data
+            model.delete_adapter(pretrained_adapter_name)
+
+            model.add_adapter("wikiann_union_adapter", config=config)
+            model.train_adapter("wikiann_union_adapter")
+            union_adapter_modules = model.get_adapter("wikiann_union_adapter")
+            for layer_i, v in union_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in union_adapter_modules[layer_i][layer_name].named_parameters():
+                        if f"{layer_i}-{layer_name}-{name}" in cached_weights:
+                            # print(f"Replacing {layer_i}-{layer_name}-{name}")
+                            param.data = cached_weights[f"{layer_i}-{layer_name}-{name}"]
+                            param.requires_grad = False
+
+            # model.add_adapter(f"wikiann-task-adapter")
+            # model.train_adapter(f"wikiann-task-adapter")
             print_model_trainable_layers(model)
+            
             return model
     else:
         def model_init():
@@ -231,7 +322,7 @@ for seed in range(args.seed_runs):
     checkpoints_dir.sort(key=lambda fp: int(fp.name.split('-')[-1]))
     with open(checkpoints_dir[-1] / "trainer_state.json") as rf:
         checkpoint = json.load(rf)['best_model_checkpoint']
-        print(checkpoint)
+        print("best_model_checkpoint:", checkpoint)
 
     if "_pfeiffer_" in model_name:
         def model_init():
@@ -267,9 +358,10 @@ for seed in range(args.seed_runs):
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            
+            # pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+            # model.set_active_adapters(pretrained_adapter_name)
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann_union_adapter")
             model.set_active_adapters(task_adapter_name)
             model.eval()
 
@@ -281,9 +373,9 @@ for seed in range(args.seed_runs):
                                                                     pad_token_id=tokenizer.pad_token_id,
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+            # pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
+            # model.set_active_adapters(pretrained_adapter_name)
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann_union_adapter")
             model.set_active_adapters(task_adapter_name)
             model.eval()
 

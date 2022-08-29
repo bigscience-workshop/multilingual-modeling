@@ -425,7 +425,7 @@ print("="*50)
 
 
 # writing results to the model name.
-with open(f"{model_name}/wikiann-results.txt", "w+") as wf:
+with open(f"{model_name}/wikiann-{language}-results.txt", "w+") as wf:
     wf.write("="*50)
     wf.write('\n')
     wf.write("Results")

@@ -108,3 +108,59 @@ python ./scripts/lang_adapt/madx_run_clm.py \
     --load_best_model_at_end \
     --use_auth_token
 ```
+
+### IA3 (No Hyperparameters)
+
+```
+# axis
+LANG="az"
+DATA_SAMPLES=$(($SLURM_ARRAY_TASK_ID * 1000))
+VOCAB_SIZE=-1
+BIGS_MODEL="bigscience/bloom-350m"
+
+# adapters
+EMBD_SRATEGY="original-frozen"
+ADPT_STRATEGY="ia3"
+ADPT_CONFIG="ia3"
+
+tokenizer_dir="bigscience/bloom-350m"
+cache_dir="/users/zyong2/data/zyong2/huggingface/"
+output_dir="/users/zyong2/data/zyong2/bigscience/data/processed/024/$(basename $BIGS_MODEL)_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples_${VOCAB_SIZE}vocab_${EMBD_SRATEGY}"
+logging_dir="/users/zyong2/data/zyong2/bigscience/reports/024/$(basename $BIGS_MODEL)_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples_${VOCAB_SIZE}vocab_${EMBD_SRATEGY}"
+
+mkdir -p $output_dir
+mkdir -p $logging_dir
+
+python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lang_adapt/madx_run_clm.py \
+    --model_name_or_path $BIGS_MODEL \
+    --tokenizer_name $tokenizer_dir \
+    --dataset_name oscar \
+    --cache_dir $cache_dir \
+    --dataset_config_name "unshuffled_deduplicated_$LANG" \
+    --logging_dir $logging_dir \
+    --report_to "tensorboard" \
+    --learning_rate 0.001 \
+    --do_train \
+    --do_eval \
+    --output_dir $output_dir \
+    --preprocessing_num_workers 8 \
+    --overwrite_output_dir \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
+    --per_device_eval_batch_size 2 \
+    --eval_accumulation_steps 4 \
+    --eval_steps 2500 \
+    --evaluation_strategy "steps" \
+    --max_eval_samples 5000 \
+    --save_steps 2500 \
+    --save_strategy "steps" \
+    --max_train_samples $DATA_SAMPLES \
+    --max_steps 12500 \
+    --logging_steps 2500 \
+    --train_adapter \
+    --lang_adapt_strategies $ADPT_STRATEGY \
+    --embedding_strategies $EMBD_SRATEGY \
+    --adapter_config $ADPT_CONFIG \
+    --language $LANG \
+    --load_best_model_at_end
+```

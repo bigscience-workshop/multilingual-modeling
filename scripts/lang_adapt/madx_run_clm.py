@@ -34,7 +34,7 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
-from transformers.adapters import PrefixTuningConfig, LoRAConfig
+from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -227,6 +227,34 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
         default='lora',
         metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
     )
+    composition_mode_lora: Optional[str] = field(
+        default='add'
+    )
+    attn_matrices_lora: List[str] = field(
+        default_factory=lambda: ["q", "v"]
+    )
+
+    # ia3
+    r_ia3: Optional[int] = field(
+        default=1,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    alpha_ia3: Optional[int] = field(
+        default=1,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    dropout_ia3: Optional[float] = field(
+        default=0.0,
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    init_weights_ia3: Optional[str] = field(
+        default='ia3',
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+    )
+    composition_mode_ia3: Optional[str] = field(
+        default='scale'
+    )
+    attn_matrices_ia3: List[str] = field(default_factory=lambda: ["k", "v"])
 
     # prefix tuning
     encoder_prefix: bool = field(
@@ -542,6 +570,21 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 alpha = adapter_args.alpha_lora,
                 dropout = adapter_args.dropout_lora,
                 init_weights = adapter_args.init_weights_lora,
+                composition_mode = adapter_args.composition_mode_lora,
+                attn_matrices = adapter_args.attn_matrices_lora,
+            )
+        
+        elif adapter_args.adapter_config == "ia3":
+            adapter_config = IA3Config(
+                selfattn_lora = adapter_args.selfattn_lora,
+                intermediate_lora = adapter_args.intermediate_lora,
+                output_lora = adapter_args.output_lora, 
+                r = adapter_args.r_ia3,
+                alpha = adapter_args.alpha_ia3,
+                dropout = adapter_args.dropout_ia3,
+                init_weights = adapter_args.init_weights_ia3,
+                composition_mode = adapter_args.composition_mode_ia3,
+                attn_matrices = adapter_args.attn_matrices_ia3,
             )
         
         else:
@@ -581,6 +624,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 )
             else:
                 model.add_adapter(task_name, config=adapter_config)
+        
         # optionally load a pre-trained language adapter
         if adapter_args.load_lang_adapter:
             # resolve the language adapter config
@@ -599,7 +643,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             lang_adapter_name = None
         
         # Freeze all model weights except of those of this adapter
-        model.train_adapter(task_name, train_embeddings=True)
+        model.train_adapter(task_name)
         
         # Set the adapters to be used in every forward pass
         #if lang_adapter_name:
@@ -738,11 +782,14 @@ def main():
     
     training_args.data_dir = f'{training_args.output_dir}'
 
+    # conditional checks
     assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", 
                                                 "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
                                                 "prefix_tuning", "prefix_tuning_flat", "prompt_tuning",
-                                                "lora", "bitfit", "aa")
+                                                "lora", "ia3", "bitfit", "aa")
     assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
+    if adapter_args.train_adapter:
+        assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "continual-pretrain-reinit", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
 
     # Setup logging
     logging.basicConfig(

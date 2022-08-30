@@ -34,13 +34,16 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
-from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config
+from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config, CompacterPlusPlusConfig
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from sft import (
+    LotteryTicketSparseFineTuner,
+)
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0")
@@ -198,6 +201,8 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
     """
     Arguments pertaining to other parameter efficient techniques such as (LoRA, BitFit, etc.)
     """
+
+
     # lora
     selfattn_lora: bool = field(
         default=True,
@@ -286,6 +291,91 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
         metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
     )
     # leave_out: Optional[List]
+
+
+    ### composable SFT unique args ###
+    train_sft: bool = field(
+        default=False, metadata={"help": "Whether to train sparse fine-tuning."}
+    )
+    full_ft_max_steps_per_iteration: Optional[int] = field(
+        default=5000,
+        metadata={
+            "help": "Maximum number of steps per parameter selection iteration during full fine-tuning."},
+    )
+    sparse_ft_max_steps_per_iteration: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum of steps per sparse fine-tuning iteration. Overriden by `--max_steps` if set."},
+    )
+    full_ft_min_steps_per_iteration: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Minimum number of steps per parameter selection iteration during full fine-tuning."
+        },
+    )
+    sparse_ft_min_steps_per_iteration: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Minimum of steps per parameter selection iteration during sparse fine-tuning."
+        },
+    )
+    full_ft_max_epochs_per_iteration: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of epochs per parameter selection iteration during full fine-tuning."
+        },
+    )
+    sparse_ft_max_epochs_per_iteration: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of epochs per parameter selection iteration during sparse fine-tuning."
+        },
+    )
+    n_ft_iterations: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": "The number of parameter selection iterations during fine-tuning."},
+    )
+    ft_params_proportion: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "The proportion of model parameters for which to learn non-zero differences during fine-tuning.\
+                Will override `ft_params_num` if both are set."},
+    )
+    ft_params_num: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "The number of model parameters for which to learn non-zero differences during fine-tuning. \
+            Defaults to a number equivalent to the number of adapter (reduction factor 16) parameters."},
+    )
+    freeze_head: bool = field(
+        default=False,
+        metadata={"help": "Whether to freeze language modeling head."},
+    )
+    untie_embeddings: bool = field(
+        default=False,
+        metadata={"help": "Whether to untie input and output embeddings."},
+    )
+    freeze_layer_norm: bool = field(
+        default=True,
+        metadata={"help": "Whether to freeze layer normalisation parameters."},
+    ) # changed from False to True
+    full_l1_reg: Optional[float] = field(
+        default=0.1, metadata={"help": "Coefficient of L1 regularisation during full fine-tuning."}
+    ) # changed from 0.0 to 0.1
+    sparse_l1_reg: Optional[float] = field(
+        default=0.1, metadata={"help": "Coefficient of L1 regularisation during sparse fine-tuning."}
+    ) # changed from 0.0 to 0.1
+    apply_reg_to_sparse_only: bool = field(
+        default=False,
+        metadata={
+            "help": "If true, only applies regularisation to those parameters which are eligible for sparse fine-tuning."
+        },
+    )
+    sparse_ft_method: Optional[str] = field(
+        default='LotteryTicket',
+        metadata={"help": 'Sparse fine-tuning method. Can be LotteryTicket or Random.'},
+    )
 
 
 def load_tokenizer(model_args):
@@ -587,6 +677,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 attn_matrices = adapter_args.attn_matrices_ia3,
             )
         
+        elif adapter_args.adapter_config == "compacterpp":
+            adapter_config = CompacterPlusPlusConfig()
+        
         else:
             # TODO: confirm with Vassilina what goes into this condition
             if model_args.adapter_placement == "all":
@@ -764,6 +857,18 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
 
+def sft_get_maskable_params(model):
+    # create masks for trainable layers 
+    # TODO: asserting to make sure no unintended maskable layers for embedding layers   
+    maskable_params = [
+        n for n, p in model.named_parameters()
+        if n.startswith(model.base_model_prefix) and p.requires_grad
+    ]
+
+
+    return maskable_params
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -785,11 +890,32 @@ def main():
     # conditional checks
     assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", 
                                                 "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
+                                                "compacterpp", "compacter", "lora", "ia3", "aa",
                                                 "prefix_tuning", "prefix_tuning_flat", "prompt_tuning",
-                                                "lora", "ia3", "bitfit", "aa")
+                                                "sft", "bitfit")
     assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
     if adapter_args.train_adapter:
         assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "continual-pretrain-reinit", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
+
+    # setup trainer class
+    trainer_class_mapping = {
+        "continual-pretrain": Trainer,
+        "continual-pretrain-reinit": Trainer,
+        "emb": Trainer, 
+        "emb-then-adpt": AdapterTrainer, 
+        "pfeiffer": AdapterTrainer,
+        "pfeiffer+inv": AdapterTrainer,
+        "compacterpp": AdapterTrainer,
+        "compacter": AdapterTrainer,
+        "lora": AdapterTrainer,
+        "ia3": AdapterTrainer,
+        "aa": AdapterTrainer,
+        "prefix_tuning": AdapterTrainer,
+        "prefix_tuning_flat": AdapterTrainer,
+        "prompt_tuning": AdapterTrainer,
+        "sft": LotteryTicketSparseFineTuner,
+        "bitfit":Trainer
+    }
 
     # Setup logging
     logging.basicConfig(
@@ -847,7 +973,8 @@ def main():
         eval_dataset = lm_datasets["validation"]
     
     # Initialize our Trainer
-    trainer_class = AdapterTrainer if adapter_args.train_adapter else Trainer
+    trainer_class = trainer_class_mapping[model_args.lang_adapt_strategies]
+    maskable_params = sft_get_maskable_params(model)
     trainer = trainer_class(
         model=model,
         args=training_args,
@@ -855,12 +982,13 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=default_data_collator
+        data_collator=default_data_collator,
+        **({'sft_args': adapter_args} if 'sft' in model_args.lang_adapt_strategies else {}),
+        **({'maskable_params': maskable_params} if 'sft' in model_args.lang_adapt_strategies else {}),
     )
 
     print("Model: 👇")
     print(model)
-
     
     # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
     # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
@@ -898,6 +1026,10 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+
+        if 'sft' in model_args.lang_adapt_strategies:
+            trainer.sft().save(f'{training_args.output_dir}/')
+    
     
     # uncomment to test whether extending vocab gradient masking is working correctly. 
     # if model_args.embedding_strategies == "extend":

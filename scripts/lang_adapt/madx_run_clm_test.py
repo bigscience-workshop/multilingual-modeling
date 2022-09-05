@@ -35,7 +35,6 @@ from transformers import (
 )
 from transformers.adapters.configuration import AdapterConfig
 from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config, CompacterPlusPlusConfig
-from transformers.adapters.configuration import AAConfig
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -57,212 +56,6 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
-
-### Implementations for FISH mask
-class SparseUpdateTrainer(Trainer):
-    """
-    Trainer for FISH Mask
-    """
-    def __init__(self, *args, mask, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.mask = mask
-
-    def training_step(self, *args, **kwargs):
-        loss = super().training_step(*args, **kwargs)
-
-        # mask out the gradients
-        for name, params in self.model.named_parameters():
-            if not params.requires_grad:
-                continue
-
-            device = params.device
-            self.mask[name] = self.mask[name].to(device)
-
-            params.grad.data.copy_(params.grad.data * self.mask[name].data)
-
-        return loss
-
-def calculate_the_importance_label(model, data_loader, num_samples, cuda_device, grad_type):
-    """
-    Args:
-        grad_type: (square or absolute) 
-    """
-    gradients_dict = {}
-
-    for name, param in model.named_parameters():
-        gradients_dict[name] = torch.zeros_like(param).to(cuda_device)
-
-    if grad_type == "absolute":
-        grad_method = torch.abs
-    elif grad_type == "square":
-        grad_method = torch.square
-
-    for idx, inputs in enumerate(data_loader):
-        if idx >= num_samples:
-            break
-
-        # print(idx)
-
-        inputs.pop("idx", None)
-        for k, v in inputs.items():
-            if isinstance(v, torch.Tensor):
-                inputs[k] = v.to(cuda_device)
-
-        return_dicts = model(**inputs)
-
-        loss = return_dicts["loss"]
-
-        loss.backward()
-
-        for name, param in model.named_parameters():
-            if param.requires_grad == False:
-                continue
-            gradients_dict[name] += grad_method(param.grad).data
-        
-        model.zero_grad()
-
-    return gradients_dict
-
-
-def calculate_the_importance_expect(model, data_loader, num_samples, cuda_device, grad_type):
-    """
-    Args:
-        grad_type: (square or absolute) 
-    """
-    gradients_dict = {}
-
-    for name, param in model.named_parameters():
-        gradients_dict[name] = torch.zeros_like(param).to(cuda_device)
-
-    if grad_type == "absolute":
-        grad_method = torch.abs
-    elif grad_type == "square":
-        grad_method = torch.square
-
-    for idx, inputs in enumerate(data_loader):
-        if idx >= num_samples:
-            break
-
-        # print(idx)
-
-        inputs.pop("idx", None)
-        for k, v in inputs.items():
-            if isinstance(v, torch.Tensor):
-                inputs[k] = v.to(cuda_device)
-
-        return_dicts = model(**inputs)
-
-        logits = return_dicts["logits"]
-
-        log_probs = torch.nn.functional.log_softmax(logits, -1)
-        probs = torch.nn.functional.softmax(logits, -1)
-
-        for b in range(logits.shape[0]):
-            for i in range(logits.shape[1]):
-                loss = - log_probs[b, i]
-                loss.backward(retain_graph=True)
-
-                prob = probs[b, i]
-
-                for name, param in model.named_parameters():
-                    gradients_dict[name] += (prob * grad_method(param.grad)).data
-
-                model.zero_grad()
-
-    return gradients_dict
-
-def create_fish_mask_gradient(model, train_dataset, data_collator, num_samples, keep_ratio, keep_num, sample_type, grad_type):
-    original_device = list(model.parameters())[0].device
-    cuda_device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    model.to(cuda_device)
-
-    from torch.utils.data import DataLoader
-    data_loader = DataLoader(
-        train_dataset,
-        batch_size=1,
-        collate_fn=data_collator,
-        shuffle=True
-    )
-
-    if sample_type == "label":
-        importance_method = calculate_the_importance_label
-    elif sample_type == "expect":
-        importance_method = calculate_the_importance_expect
-    else:
-        raise NotImplementedError
-
-    gradients = importance_method(model, data_loader, num_samples, cuda_device, grad_type)
-
-    # add sizes and aggregate tensors
-    sizes = {}
-    tensors = []
-
-    classifier_size = 0 # for BLOOM language adaptation, classifier_size == 0.
-    all_params_size = 0
-
-    classifier_mask_dict = {}
-
-    for k, v in gradients.items():
-        # don't count classifier layer, they should be all trainable
-        if "classifier" in k:
-            classifier_size += torch.prod(torch.tensor(v.shape)).item()
-            classifier_mask_dict[k] = torch.ones_like(v).to(original_device)
-        else:
-            sizes[k] = v.shape
-            tensors.append(v.view(-1))
-
-        all_params_size += torch.prod(torch.tensor(v.shape)).item()
-
-    tensors = torch.cat(tensors, 0)
-
-    if keep_num == 0:
-        keep_num = int(all_params_size * keep_ratio) - classifier_size
-
-    assert keep_num > 0
-
-    tensors = tensors.to("cpu")  # transfer to CPU to avoid CUDA memory error.
-    top_pos = torch.topk(tensors, keep_num)[1]
-
-    masks = torch.zeros_like(tensors, device=cuda_device)
-
-    masks[top_pos] = 1
-
-    assert masks.long().sum() == len(top_pos)
-
-    mask_dict = {}
-
-    now_idx = 0
-    for k, v in sizes.items():
-        end_idx = now_idx + torch.prod(torch.tensor(v))
-        mask_dict[k] = masks[now_idx: end_idx].reshape(v).to(original_device)
-        now_idx = end_idx
-
-    assert now_idx == len(masks)
-
-    # Add the classifier's mask to mask_dict
-    mask_dict.update(classifier_mask_dict)
-
-    model.to(original_device)
-
-    # Print the parameters for checking
-    classifier_size = 0
-    all_params_size = 0
-    pretrain_weight_size = 0
-    
-    for k, v in mask_dict.items():
-        if "classifier" in k:
-            classifier_size += (v == 1).sum().item()
-        else:
-            pretrain_weight_size += (v == 1).sum().item()
-
-        all_params_size += torch.prod(torch.tensor(v.shape)).item()
-    
-    print(pretrain_weight_size, classifier_size, all_params_size)
-    # print(f"trainable parameters: {(pretrain_weight_size + classifier_size) / all_params_size * 100} %")
-    print(f"[FISH] Total trainable parameters: {pretrain_weight_size + classifier_size}")
-
-    return mask_dict
 
 @dataclass
 class ModelArguments:
@@ -584,37 +377,6 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
         metadata={"help": 'Sparse fine-tuning method. Can be LotteryTicket or Random.'},
     )
 
-    # FISH mask
-    fish_num_samples: int = field(
-        default=1024,
-        metadata={"help": "The number of samples to compute parameters importance"}
-    )
-    fish_keep_ratio: float = field(
-        default=0.005,
-        metadata={"help": "The trainable parameters to total parameters."}
-    )
-    fish_keep_num: int = field(
-        default=0,
-        metadata={"help": "Number of trainable paramers. Override fish_keep_ratio"}
-    )
-    fish_mask_method: str = field(
-        default="label-square",
-        metadata={"help": "The method to select trainable parameters. Format: sample_type-grad_type, \
-                   where sample_type in \{label, expect\}, and grad_type in \{absolute, square\}"}
-    )
-    normal_training: bool = field(
-        default=False,
-        metadata={"help": "Whether to use typical BERT training method."}
-    )
-    mask_path: str = field(
-        default="",
-        metadata={"help": "The path for existing mask."}
-    )
-    data_split_path: str = field(
-        default="",
-        metadata={"help": "The path for existing training data indices."}
-    )
-
 
 def load_tokenizer(model_args):
     tokenizer_kwargs = {
@@ -915,15 +677,6 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 attn_matrices = adapter_args.attn_matrices_ia3,
             )
         
-        elif adapter_args.adapter_config == "aa":
-            adapter_config = AAConfig(
-                ln_before=True, # applying layernorm before the adapter bottleneck is necessary 
-                                # for training stability w.r.t. Rational activation
-                                # otherwise we will have loss = 0. and numerators/denominators = nan.
-                reduction_factor=adapter_args.adapter_reduction_factor,
-                non_linearity="rational_5_4",
-            )
-        
         elif adapter_args.adapter_config == "compacterpp":
             adapter_config = CompacterPlusPlusConfig()
         
@@ -1103,18 +856,17 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
     print(f"Total trainable parameters: {trainable_params}")
-    print(f"❗️ Note: These figures are incorrect for masking-based methods such as sft and fish.")
 
 def sft_get_maskable_params(model):
     # create masks for trainable layers 
     # TODO: asserting to make sure no unintended maskable layers for embedding layers   
-    sft_maskable_params = [
+    maskable_params = [
         n for n, p in model.named_parameters()
         if n.startswith(model.base_model_prefix) and p.requires_grad
     ]
 
 
-    return sft_maskable_params
+    return maskable_params
 
 
 def main():
@@ -1140,31 +892,10 @@ def main():
                                                 "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
                                                 "compacterpp", "compacter", "lora", "ia3", "aa",
                                                 "prefix_tuning", "prefix_tuning_flat", "prompt_tuning",
-                                                "sft", "bitfit", "fish")
+                                                "sft", "bitfit")
     assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
     if adapter_args.train_adapter:
         assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "continual-pretrain-reinit", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
-
-    # setup trainer class
-    trainer_class_mapping = {
-        "continual-pretrain": Trainer,
-        "continual-pretrain-reinit": Trainer,
-        "emb": Trainer, 
-        "emb-then-adpt": AdapterTrainer, 
-        "pfeiffer": AdapterTrainer,
-        "pfeiffer+inv": AdapterTrainer,
-        "compacterpp": AdapterTrainer,
-        "compacter": AdapterTrainer,
-        "lora": AdapterTrainer,
-        "ia3": AdapterTrainer,
-        "aa": AdapterTrainer,
-        "prefix_tuning": AdapterTrainer,
-        "prefix_tuning_flat": AdapterTrainer,
-        "prompt_tuning": AdapterTrainer,
-        "sft": LotteryTicketSparseFineTuner,
-        "bitfit": Trainer,
-        "fish": SparseUpdateTrainer,
-    }
 
     # Setup logging
     logging.basicConfig(
@@ -1222,20 +953,9 @@ def main():
         eval_dataset = lm_datasets["validation"]
     
     # Initialize our Trainer
-    trainer_class = trainer_class_mapping[model_args.lang_adapt_strategies]
-    sft_maskable_params = sft_get_maskable_params(model)
-    
-    fish_sample_type, fish_grad_type = adapter_args.fish_mask_method.split("-")
-    fish_mask = create_fish_mask_gradient(
-        model,
-        train_dataset,
-        data_collator=default_data_collator,
-        num_samples=adapter_args.fish_num_samples,
-        keep_ratio=adapter_args.fish_keep_ratio,
-        keep_num=adapter_args.fish_keep_num,
-        sample_type=fish_sample_type,
-        grad_type=fish_grad_type,
-    )
+    # trainer_class = AdapterTrainer if adapter_args.train_adapter else Trainer
+    trainer_class = LotteryTicketSparseFineTuner
+    maskable_params = sft_get_maskable_params(model)
     trainer = trainer_class(
         model=model,
         args=training_args,
@@ -1245,12 +965,12 @@ def main():
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
         **({'sft_args': adapter_args} if 'sft' in model_args.lang_adapt_strategies else {}),
-        **({'maskable_params': sft_maskable_params} if 'sft' in model_args.lang_adapt_strategies else {}),
-        **({'mask': fish_mask} if 'fish' in model_args.lang_adapt_strategies else {}),
+        **({'maskable_params': maskable_params} if 'sft' in model_args.lang_adapt_strategies else {}),
     )
 
     print("Model: 👇")
     print(model)
+
     
     # print("Embeddings at start of run:", model.get_input_embeddings().weight[250880:,:]) # get original weight for embedding layer
     # orig_embeddings = model.get_input_embeddings().weight.detach().clone() # clone original weight for embedding layer
@@ -1291,7 +1011,8 @@ def main():
 
         if 'sft' in model_args.lang_adapt_strategies:
             trainer.sft().save(f'{training_args.output_dir}/')
-    
+        
+        print("Done!")
     
     # uncomment to test whether extending vocab gradient masking is working correctly. 
     # if model_args.embedding_strategies == "extend":

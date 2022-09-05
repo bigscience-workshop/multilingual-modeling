@@ -90,8 +90,9 @@ if not args.cross_lingual and not args.train_lang:
 assert not ((args.train_lang != args.lang) ^ args.cross_lingual)
 
 if args.baseline:
-    logger.warning("❗️ No 'madx_lang_adapter' loaded. This should be the baseline performance.")
+    logger.warning("❗️ This should be the baseline performance.")
     assert not args.madx_lang_adapter
+    assert not args.adapted_model_dir
 
 # additional args to pass to the model init. task-dependent
 optional_model_kwargs = {}
@@ -112,7 +113,6 @@ if args.local_rank:
     torch.cuda.set_device(args.local_rank)
 
 if args.original_model is None:
-    # here: because the wpe is not saved, adapted_model_dir is the original bigsciece model
     args.original_model = args.adapted_model_dir
 
 print("Arguments: ========")
@@ -460,17 +460,19 @@ def load_model(args, inference=False):
             model = make_base_model_trainable(args, model, inference)
         return model
 
-    model = model_class_mapping[args.dataset].from_pretrained(args.original_model, 
+    model_name = args.adapted_model_dir if not args.madx_lang_adapter else args.original_model
+    model = model_class_mapping[args.dataset].from_pretrained(model_name, 
                                                               pad_token_id=pad_token_id,
                                                               cache_dir=args.cache_dir,
                                                               revision=args.revision,
                                                               **optional_model_kwargs)
-                                                              
+    # load language adapters
+    if args.madx_lang_adapter:
+        model = load_language_adapters(args, model)
+
     # adapted models
     if not args.cross_lingual or inference:
         model = load_embedding_layers(args, tokenizer, model)
-        if args.madx_lang_adapter:
-            model = load_language_adapters(args, model)
     
     if args.task_layers == "task-adapters":
         model = load_task_specific_adapters(args, model, inference)

@@ -14,11 +14,11 @@
 #SBATCH --mem=50g
 
 # Specify a job name:
-#SBATCH -J exp-024-run_clm_ia3_az_350m
+#SBATCH -J exp-024-run_clm_lora_az_350m
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_lora_az_350m_%a.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_lora_az_350m_%a.err
 
 # Set up the environment by loading modules
 set -a # automatically export all variables
@@ -37,8 +37,9 @@ BIGS_MODEL="bigscience/bloom-350m"
 
 # adapters
 EMBD_SRATEGY="original-frozen"
-ADPT_STRATEGY="ia3"
-ADPT_CONFIG="ia3"
+ADPT_STRATEGY="lora"
+ADPT_CONFIG="lora"
+R_LORA=32  # rank
 
 tokenizer_dir="bigscience/bloom-350m"
 cache_dir="/users/zyong2/data/zyong2/huggingface/"
@@ -77,6 +78,7 @@ python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lan
     --train_adapter \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \
+    --r_lora $R_LORA \
     --adapter_config $ADPT_CONFIG \
     --language $LANG \
     --load_best_model_at_end

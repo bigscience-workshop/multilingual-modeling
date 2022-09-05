@@ -14,20 +14,20 @@
 #SBATCH --mem=50g
 
 # Specify a job name:
-#SBATCH -J exp-024-run_clm_ia3_az_350m
+#SBATCH -J exp-024-run_clm_pfeiffer_az_350m
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_pfeiffer_az_350m_%a.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_pfeiffer_az_350m_%a.err
 
 # Set up the environment by loading modules
 set -a # automatically export all variables
 source ~/.env
 set +a
 
-module load python/3.7.4
+module load python/3.9.0
 module load gitlfs/2.7.1
-source $FP_BIGS/env_try_lora/bin/activate
+source $FP_BIGS/env_sft/bin/activate
 
 # axis
 LANG="az"
@@ -37,8 +37,9 @@ BIGS_MODEL="bigscience/bloom-350m"
 
 # adapters
 EMBD_SRATEGY="original-frozen"
-ADPT_STRATEGY="ia3"
-ADPT_CONFIG="ia3"
+ADPT_STRATEGY="pfeiffer"
+ADPT_CONFIG="pfeiffer"
+ADPT_REDUCTION_FACTOR=16  # 16, 48, 384
 
 tokenizer_dir="bigscience/bloom-350m"
 cache_dir="/users/zyong2/data/zyong2/huggingface/"
@@ -56,7 +57,7 @@ python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lan
     --dataset_config_name "unshuffled_deduplicated_$LANG" \
     --logging_dir $logging_dir \
     --report_to "tensorboard" \
-    --learning_rate 0.001 \
+    --learning_rate 0.0001 \
     --do_train \
     --do_eval \
     --output_dir $output_dir \
@@ -66,17 +67,18 @@ python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lan
     --gradient_accumulation_steps 4 \
     --per_device_eval_batch_size 2 \
     --eval_accumulation_steps 4 \
-    --eval_steps 2500 \
+    --eval_steps 5000 \
     --evaluation_strategy "steps" \
     --max_eval_samples 5000 \
-    --save_steps 2500 \
+    --save_steps 5000 \
     --save_strategy "steps" \
     --max_train_samples $DATA_SAMPLES \
-    --max_steps 12500 \
+    --max_steps 25000 \
     --logging_steps 2500 \
     --train_adapter \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \
+    --adapter_reduction_factor $ADPT_REDUCTION_FACTOR \
     --adapter_config $ADPT_CONFIG \
     --language $LANG \
     --load_best_model_at_end

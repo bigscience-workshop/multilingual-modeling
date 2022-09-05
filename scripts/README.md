@@ -1,4 +1,4 @@
-### README
+# README
 
 This folder contains everything we need for running BigScience language adaptation experiments.
 

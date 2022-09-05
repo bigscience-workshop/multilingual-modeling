@@ -14,11 +14,11 @@
 #SBATCH --mem=50g
 
 # Specify a job name:
-#SBATCH -J exp-024-run_clm_ia3_az_350m
+#SBATCH -J exp-024-run_clm_sft_az_350m
 
 # Specify an output file
-#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.out
-#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_ia3_az_350m_%a.err
+#SBATCH -o /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_sft_az_350m_%a.out
+#SBATCH -e /users/zyong2/data/zyong2/bigscience/logs/log-024/run_clm_sft_az_350m_%a.err
 
 # Set up the environment by loading modules
 set -a # automatically export all variables
@@ -37,8 +37,8 @@ BIGS_MODEL="bigscience/bloom-350m"
 
 # adapters
 EMBD_SRATEGY="original-frozen"
-ADPT_STRATEGY="ia3"
-ADPT_CONFIG="ia3"
+ADPT_STRATEGY="sft"
+ft_params_num=3697664
 
 tokenizer_dir="bigscience/bloom-350m"
 cache_dir="/users/zyong2/data/zyong2/huggingface/"
@@ -72,13 +72,15 @@ python /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/lan
     --save_steps 5000 \
     --save_strategy "steps" \
     --max_train_samples $DATA_SAMPLES \
-    --max_steps 25000 \
     --logging_steps 2500 \
-    --train_adapter \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \
-    --adapter_config $ADPT_CONFIG \
     --language $LANG \
-    --load_best_model_at_end
+    --load_best_model_at_end \
+    --train_sft \
+    --ft_params_num $ft_params_num \
+    --full_ft_max_steps_per_iteration 25000 \
+    --sparse_ft_max_steps_per_iteration 25000
+
 
 # max_steps = 50000

@@ -18,7 +18,7 @@ from datasets import load_dataset
 from transformers import TrainingArguments, Trainer, Seq2SeqTrainer, AdapterTrainer, Seq2SeqAdapterTrainer, Seq2SeqTrainingArguments
 from transformers import AutoTokenizer, AutoModelWithLMHead, AutoModelForSequenceClassification, AutoModelForCausalLM, AutoModelForTokenClassification
 from transformers.adapters.composition import Stack
-from transformers import AdapterConfig, LoRAConfig, PrefixTuningConfig, ConfigUnion
+from transformers import AdapterConfig, LoRAConfig, PrefixTuningConfig, ConfigUnion, IA3Config
 
 
 import argparse
@@ -154,6 +154,10 @@ scores = list()
 for seed in range(args.seed_runs):
     set_seed(seed)
     
+    if "_pfeiffer_inv_" in model_name:
+        # TODO: current hack to avoid the naming issue.
+        assert False, "rename '_pfeiffer_inv_' to '_pfeiffer+inv_'"
+
     if "_pfeiffer_" in model_name:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(base_model, 
@@ -174,6 +178,19 @@ for seed in range(args.seed_runs):
                                                                     cache_dir=args.cache_dir,
                                                                     num_labels=7)
             pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+
+            model.add_adapter(f"wikiann-task-adapter")
+            model.train_adapter(f"wikiann-task-adapter")
+            model.active_adapters = Stack(pretrained_adapter_name, f"wikiann-task-adapter")
+            print_model_trainable_layers(model)
+            return model
+    elif "_aa_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_aa_{language}")
 
             model.add_adapter(f"wikiann-task-adapter")
             model.train_adapter(f"wikiann-task-adapter")
@@ -222,6 +239,41 @@ for seed in range(args.seed_runs):
 
             # model.add_adapter(f"wikiann-task-adapter")
             # model.train_adapter(f"wikiann-task-adapter")
+            print_model_trainable_layers(model)
+            return model
+    elif "_ia3_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            with open(f"{model_name}/oscar_ia3_{language}/adapter_config.json") as rf:
+                ia3_config_dict = json.load(rf)['config']
+
+            config = ConfigUnion(
+                IA3Config.from_dict(ia3_config_dict),
+                AdapterConfig.from_dict(task_config_dict)
+            )
+
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_ia3_{language}")
+            pretrained_adapter_modules = model.get_adapter(pretrained_adapter_name)
+            cached_weights = {}
+            for layer_i, v in pretrained_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in pretrained_adapter_modules[layer_i][layer_name].named_parameters():
+                        cached_weights[f"{layer_i}-{layer_name}-{name}"] = param.data
+            model.delete_adapter(pretrained_adapter_name)
+
+            model.add_adapter("wikiann_union_adapter", config=config)
+            model.train_adapter("wikiann_union_adapter")
+            union_adapter_modules = model.get_adapter("wikiann_union_adapter")
+            for layer_i, v in union_adapter_modules.items():
+                for layer_name in v.keys():
+                    for name, param in union_adapter_modules[layer_i][layer_name].named_parameters():
+                        if f"{layer_i}-{layer_name}-{name}" in cached_weights:
+                            # print(f"Replacing {layer_i}-{layer_name}-{name}")
+                            param.data = cached_weights[f"{layer_i}-{layer_name}-{name}"]
+                            param.requires_grad = False
             print_model_trainable_layers(model)
             return model
     elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
@@ -276,7 +328,8 @@ for seed in range(args.seed_runs):
             return model
 
     # model.freeze_model(True)
-
+    
+    # finetuning setting: https://aclanthology.org/2021.acl-long.172.pdf
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         overwrite_output_dir=True,
@@ -352,7 +405,22 @@ for seed in range(args.seed_runs):
 
             print_model_trainable_layers(model)
             return model
-    elif "_lora_" in model_name:
+    elif "_aa_" in model_name:
+        def model_init():
+            model = AutoModelForTokenClassification.from_pretrained(base_model, 
+                                                                    pad_token_id=tokenizer.pad_token_id,
+                                                                    cache_dir=args.cache_dir,
+                                                                    num_labels=7)
+            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_aa_{language}")
+            task_adapter_name = model.load_adapter(f"{checkpoint}/wikiann-task-adapter")
+
+            model.active_adapters = Stack(pretrained_adapter_name, task_adapter_name)
+            model.eval()
+
+            print_model_trainable_layers(model)
+            return model
+    elif "_lora_" in model_name or \
+         "_ia3_" in model_name:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(base_model, 
                                                                     pad_token_id=tokenizer.pad_token_id,

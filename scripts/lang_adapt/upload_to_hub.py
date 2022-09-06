@@ -4,13 +4,13 @@ from huggingface_hub import create_repo
 import argparse
 import subprocess
 parser = argparse.ArgumentParser()
-# parser.add_argument("--local_dir", type=str, required=True)
-# parser.add_argument("--remote_dir", type=str, required=True)
+parser.add_argument("--local_dir", type=str, required=True)
+parser.add_argument("--remote_dir", type=str, required=True)
 parser.add_argument("--commit_message", type=str, default="Push to HF hub")
 args = parser.parse_args()
 
-args.local_dir = "/users/zyong2/data/zyong2/bigscience/data/processed/024/bloom-350m_az_continual-pretrain-reinit_100000samples_-1vocab_original"
-args.remote_dir = "bs-la/bloom-350m_az_continual-pretrain-reinit_100000samples_-1vocab_original"
+# args.local_dir = "/users/zyong2/data/zyong2/bigscience/data/processed/024/bloom-350m_az_fish_1000samples_-1vocab_original-frozen"
+# args.remote_dir = "bs-la/bloom-350m_az_fish_1000samples_-1vocab_original-frozen"
 
 # git init
 subprocess.run(f"cd {args.local_dir} && git init", shell=True)

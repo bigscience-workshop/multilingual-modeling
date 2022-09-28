@@ -25,6 +25,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--lang", type=str)
 parser.add_argument("--cache_dir", type=str, default="/users/zyong2/data/zyong2/huggingface")
+parser.add_argument("--training_config", type=str)
 parser.add_argument("--output_dir", type=str)
 parser.add_argument("--tokenizer", type=str)
 parser.add_argument("--model_name", type=str)
@@ -329,27 +330,50 @@ for seed in range(args.seed_runs):
 
     # model.freeze_model(True)
     
-    # finetuning setting: https://aclanthology.org/2021.acl-long.172.pdf
-    training_args = TrainingArguments(
-        output_dir=args.output_dir,
-        overwrite_output_dir=True,
-        do_train=True,
-        do_eval=True,
-        eval_steps=None,
-        num_train_epochs=5,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
-        gradient_accumulation_steps=4,
-        learning_rate=5e-5,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        logging_strategy="epoch",
-        logging_steps=500,
-        report_to="tensorboard",
-        load_best_model_at_end=True, # will load the last saved **model** checkpoint, so will cause problem for adapters.
-        metric_for_best_model='eval_overall_f1',
-        local_rank=args.local_rank
-    )
+    # wikiann finetuning setting: https://aclanthology.org/2021.acl-long.172.pdf
+    output_dir = f"{args.output_dir}/seed{seed}"
+    if args.training_config == "madx":
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            overwrite_output_dir=True,
+            do_train=True,
+            do_eval=True,
+            eval_steps=None,
+            num_train_epochs=100,
+            per_device_train_batch_size=8,
+            per_device_eval_batch_size=8,
+            gradient_accumulation_steps=2,
+            learning_rate=1e-4,
+            evaluation_strategy="epoch",
+            save_strategy="epoch",
+            logging_strategy="epoch",
+            logging_steps=500,
+            report_to="tensorboard",
+            load_best_model_at_end=True, # will load the last saved **model** checkpoint, so will cause problem for adapters.
+            metric_for_best_model='eval_overall_f1',
+            local_rank=args.local_rank
+        )
+    else:
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            overwrite_output_dir=True,
+            do_train=True,
+            do_eval=True,
+            eval_steps=None,
+            num_train_epochs=5,
+            per_device_train_batch_size=8,
+            per_device_eval_batch_size=8,
+            gradient_accumulation_steps=4,
+            learning_rate=5e-5,
+            evaluation_strategy="epoch",
+            save_strategy="epoch",
+            logging_strategy="epoch",
+            logging_steps=500,
+            report_to="tensorboard",
+            load_best_model_at_end=True, # will load the last saved **model** checkpoint, so will cause problem for adapters.
+            metric_for_best_model='eval_overall_f1',
+            local_rank=args.local_rank
+        )
     if args.reproducible:
         trainer = AdapterTrainer(
             model_init=model_init,
@@ -371,7 +395,7 @@ for seed in range(args.seed_runs):
     
     trainer.train()
 
-    checkpoints_dir = list(pathlib.Path(f"{args.output_dir}/").glob("checkpoint-*"))
+    checkpoints_dir = list(pathlib.Path(f"{output_dir}/").glob("checkpoint-*"))
     checkpoints_dir.sort(key=lambda fp: int(fp.name.split('-')[-1]))
     with open(checkpoints_dir[-1] / "trainer_state.json") as rf:
         checkpoint = json.load(rf)['best_model_checkpoint']

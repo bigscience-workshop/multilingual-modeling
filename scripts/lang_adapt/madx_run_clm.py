@@ -35,7 +35,6 @@ from transformers import (
 )
 from transformers.adapters.configuration import AdapterConfig
 from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config, CompacterPlusPlusConfig
-from transformers.adapters.configuration import AAConfig
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -915,14 +914,15 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 attn_matrices = adapter_args.attn_matrices_ia3,
             )
         
-        elif adapter_args.adapter_config == "aa":
-            adapter_config = AAConfig(
-                ln_before=True, # applying layernorm before the adapter bottleneck is necessary 
-                                # for training stability w.r.t. Rational activation
-                                # otherwise we will have loss = 0. and numerators/denominators = nan.
-                reduction_factor=adapter_args.adapter_reduction_factor,
-                non_linearity="rational_5_4",
-            )
+        #### commenting out because we are not using adaptable adapters
+        # elif adapter_args.adapter_config == "aa":
+        #     adapter_config = AAConfig(
+        #         ln_before=True, # applying layernorm before the adapter bottleneck is necessary 
+        #                         # for training stability w.r.t. Rational activation
+        #                         # otherwise we will have loss = 0. and numerators/denominators = nan.
+        #         reduction_factor=adapter_args.adapter_reduction_factor,
+        #         non_linearity="rational_5_4",
+        #     )
         
         elif adapter_args.adapter_config == "compacterpp":
             adapter_config = CompacterPlusPlusConfig()
@@ -1221,21 +1221,31 @@ def main():
     if training_args.do_eval:
         eval_dataset = lm_datasets["validation"]
     
+    # masks for SFT and FISH
+    if 'sft' in model_args.lang_adapt_strategies:
+        sft_maskable_params = sft_get_maskable_params(model)
+    else:
+        sft_maskable_params = {}
+    
+    
+    if 'fish' in model_args.lang_adapt_strategies:
+        fish_sample_type, fish_grad_type = adapter_args.fish_mask_method.split("-")
+        fish_mask = create_fish_mask_gradient(
+            model,
+            train_dataset,
+            data_collator=default_data_collator,
+            num_samples=adapter_args.fish_num_samples,
+            keep_ratio=adapter_args.fish_keep_ratio,
+            keep_num=adapter_args.fish_keep_num,
+            sample_type=fish_sample_type,
+            grad_type=fish_grad_type,
+        )
+    else:
+        fish_mask = {}
+
     # Initialize our Trainer
     trainer_class = trainer_class_mapping[model_args.lang_adapt_strategies]
-    sft_maskable_params = sft_get_maskable_params(model)
-    
-    fish_sample_type, fish_grad_type = adapter_args.fish_mask_method.split("-")
-    fish_mask = create_fish_mask_gradient(
-        model,
-        train_dataset,
-        data_collator=default_data_collator,
-        num_samples=adapter_args.fish_num_samples,
-        keep_ratio=adapter_args.fish_keep_ratio,
-        keep_num=adapter_args.fish_keep_num,
-        sample_type=fish_sample_type,
-        grad_type=fish_grad_type,
-    )
+
     trainer = trainer_class(
         model=model,
         args=training_args,

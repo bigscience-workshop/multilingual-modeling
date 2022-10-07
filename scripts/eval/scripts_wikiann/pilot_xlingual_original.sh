@@ -4,7 +4,7 @@
 #SBATCH --time=23:59:00
 
 # Ask for the GPU partition and 1 GPU
-#SBATCH --partition=3090-gcondo --gres=gpu:1
+#SBATCH --partition=gpu-he --gres=gpu:1
 # #SBATCH --constraint=v100
 
 # Default resources are 1 core with 2.8GB of memory.
@@ -30,14 +30,14 @@ module load gitlfs/2.7.1
 source $FP_BIGS/env_try_lora/bin/activate
 
 language="de"
-# ckpt="checkpoint-12500"
 model_name="bigscience/bloom-560m"
 output_dir="${model_name}/pilot_wikiann-${language}"
 
 python3 /users/zyong2/data/zyong2/bigscience/gh/multilingual-modeling/scripts/eval/scripts_wikiann/pilot_xlingual.py \
 --lang $language \
---en_adpt_dir "/users/zyong2/data/zyong2/bigscience/data/processed/025-wikiann-en/pilot_wikiann-en_bloom-560m" \
+--en_adpt_dir "/users/zyong2/data/zyong2/bigscience/data/processed/025-wikiann-en/pilot_wikiann-en_bloom-560m_madx_setting" \
 --output_dir $output_dir \
 --tokenizer "bigscience/bloom-560m" \
 --model_name $model_name \
---base_model "bigscience/bloom-560m"
+--base_model "bigscience/bloom-560m" \
+--seed_runs 5

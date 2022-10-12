@@ -172,7 +172,7 @@ for seed in range(args.seed_runs):
             model.active_adapters = Stack(pretrained_adapter_name, f"wikiann-task-adapter")
             print_model_trainable_layers(model)
             return model
-    elif "_pfeiffer+inv_" in model_name:
+    elif "_pfeiffer+inv_" in model_name or "_pfeiffer_inv_" in model_name:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(base_model, 
                                                                     pad_token_id=tokenizer.pad_token_id,
@@ -415,7 +415,7 @@ for seed in range(args.seed_runs):
 
             print_model_trainable_layers(model)
             return model
-    elif "_pfeiffer+inv_" in model_name:
+    elif "_pfeiffer+inv_" in model_name or "_pfeiffer_inv_" in model_name:
         def model_init():
             model = AutoModelForTokenClassification.from_pretrained(base_model, 
                                                                     pad_token_id=tokenizer.pad_token_id,

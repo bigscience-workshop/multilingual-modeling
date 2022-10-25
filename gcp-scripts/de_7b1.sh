@@ -14,8 +14,8 @@ logging_dir="/home/zhengxinyong/logs/$(basename $BIGS_MODEL)_${LANG}_${ADPT_STRA
 mkdir -p $output_dir
 mkdir -p $logging_dir
 
-BSZ=2
-deepspeed --num_gpus=4 --master_port 60000 \
+BSZ=1
+deepspeed --num_gpus=8 --master_port 60000 \
     /home/zhengxinyong/multilingual-modeling/scripts/lang_adapt/madx_run_clm.py \
     --model_name_or_path $BIGS_MODEL \
     --tokenizer_name $tokenizer_dir \
@@ -45,4 +45,6 @@ deepspeed --num_gpus=4 --master_port 60000 \
     --lang_adapt_strategies $ADPT_STRATEGY \
     --embedding_strategies $EMBD_SRATEGY \
     --load_best_model_at_end \
-    --deepspeed "/home/zhengxinyong/multilingual-modeling/scripts/lang_adapt/ds_config_zero3.json"
+    --deepspeed "/home/zhengxinyong/multilingual-modeling/scripts/lang_adapt/ds_config_zero2.json" \
+    --gradient_checkpointing \
+    --fp16

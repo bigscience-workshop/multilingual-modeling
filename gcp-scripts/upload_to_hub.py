@@ -35,11 +35,11 @@ def upload_to_hub(local_dir, remote_dir, commit_message, model_type):
 
     if model_type == "full-model":
         files_to_keep = [".git", ".gitignore", ".gitattributes",
-                         "config.json", "optimizer.pt", "pytorch_model.bin", "rng_state.pth", "scheduler.pt", "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json", "trainer_state.json", "training_args.bin"]
+                         "config.json", "optimizer.pt", "rng_state.pth", "scheduler.pt", "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json", "trainer_state.json", "training_args.bin"]
         for f in pathlib.Path(local_dir).glob("*"):
             # get relative path
             strf = str(f.relative_to(pathlib.Path(local_dir)))
-            if strf not in files_to_keep:
+            if strf not in files_to_keep and "pytorch_model" not in strf:
                 add_to_gitignore(local_dir, f, strf)
 
     elif model_type == "adapter":
@@ -52,14 +52,14 @@ def upload_to_hub(local_dir, remote_dir, commit_message, model_type):
     
     elif model_type == "mask":
         files_to_keep = [".git", ".gitignore", ".gitattributes",
-                         "config.json", "optimizer.pt", "pytorch_model.bin", "rng_state.pth", "scheduler.pt", "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json", "trainer_state.json", "training_args.bin",
+                         "config.json", "optimizer.pt", "rng_state.pth", "scheduler.pt", "special_tokens_map.json", "tokenizer_config.json", "tokenizer.json", "trainer_state.json", "training_args.bin",
                          # sft:
                          "pytorch_diff.bin",
                          ]
         for f in pathlib.Path(local_dir).glob("*"):
             # get relative path
             strf = str(f.relative_to(pathlib.Path(local_dir)))
-            if strf not in files_to_keep: #FIXME: replace dataset-specific keyword with sth else.
+            if strf not in files_to_keep and "pytorch_model" not in strf: #FIXME: replace dataset-specific keyword with sth else.
                 add_to_gitignore(local_dir, f, strf)
 
     else:
@@ -68,7 +68,6 @@ def upload_to_hub(local_dir, remote_dir, commit_message, model_type):
         subprocess.run(f"cd {args.local_dir} && echo 'checkpoint-*/' >> .gitignore", shell=True)
         subprocess.run(f"cd {args.local_dir} && echo '*/pilot_*/' >> .gitignore", shell=True)
         subprocess.run(f"cd {args.local_dir} && echo 'pilot_*/' >> .gitignore", shell=True)
-    
     
     # create remote repo
     try:
@@ -97,7 +96,7 @@ def upload_to_hub(local_dir, remote_dir, commit_message, model_type):
 
     # git push to main branch on remote
     branch_name = subprocess.run(f"cd {local_dir} && git symbolic-ref --short HEAD", shell=True, capture_output=True, text=True).stdout.strip()
-    subprocess.run(f"cd {local_dir} && git push origin {branch_name}:main", shell=True)
+    subprocess.run(f"cd {local_dir} && git push -f origin {branch_name}:main", shell=True)
 
 def upload_ckpt_to_hub(local_dir, checkpoint_dir, remote_dir, commit_message, model_type):
     # create checkpoint branch
@@ -141,16 +140,20 @@ def rm_one(local_dir, remote_dir, rm_file, commit_message="rm --cached"):
 #     if any(folder.iterdir()) is False:
 #         continue
 
-folder = "/home/zhengxinyong/outputs/bloom-1b1_de_continual-pretrain_100000samples_-1vocab_original"
+folder = "/home/zhengxinyong/outputs/bloom-7b1_de_continual-pretrain_100000samples_-1vocab_original"
 local_dir = str(folder)
 remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv"
 
 if "continual" in local_dir or "bitfit" in local_dir:
     # rm_file = "*"
     # rm_one(local_dir, remote_dir, rm_file)
-    # upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="full-model")
+    upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="full-model")
     
-    upload_ckpt_to_hub(local_dir, "checkpoint-25000", remote_dir, commit_message=args.commit_message, model_type="full-model")
+    # upload_ckpt_to_hub(local_dir, "checkpoint-5000", remote_dir, commit_message=args.commit_message, model_type="full-model")
+    # upload_ckpt_to_hub(local_dir, "checkpoint-10000", remote_dir, commit_message=args.commit_message, model_type="full-model")
+    # upload_ckpt_to_hub(local_dir, "checkpoint-15000", remote_dir, commit_message=args.commit_message, model_type="full-model")
+    # upload_ckpt_to_hub(local_dir, "checkpoint-20000", remote_dir, commit_message=args.commit_message, model_type="full-model")
+    # upload_ckpt_to_hub(local_dir, "checkpoint-25000", remote_dir, commit_message=args.commit_message, model_type="full-model")
 elif "pfeiffer" in local_dir or "lora" in local_dir or "ia3" in local_dir:
     upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="adapter")
 elif "fish" in local_dir or "sft" in local_dir:

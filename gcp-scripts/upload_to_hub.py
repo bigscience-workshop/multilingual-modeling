@@ -140,7 +140,7 @@ def rm_one(local_dir, remote_dir, rm_file, commit_message="rm --cached"):
 #     if any(folder.iterdir()) is False:
 #         continue
 
-folder = "/home/zhengxinyong/outputs/bloom-7b1_de_continual-pretrain_100000samples_-1vocab_original"
+folder = "/home/zhengxinyong/outputs/bloom-7b1_th_continual-pretrain_100000samples_-1vocab_original"
 local_dir = str(folder)
 remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv"
 

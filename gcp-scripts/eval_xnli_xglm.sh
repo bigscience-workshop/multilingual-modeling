@@ -5,7 +5,7 @@ M="bigscience/bloom-7b1"
 python3 /home/zhengxinyong/lm-evaluation-harness/main.py \
 --model bigscience \
 --model_args tokenizer=$M,pretrained=$M \
---device cuda:0 \
+--device cuda:3 \
 --tasks xnli_ru \
 --no_cache
 

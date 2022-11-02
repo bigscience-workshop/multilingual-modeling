@@ -1,12 +1,12 @@
-LANG="de"
+LANG="ru"
 DATA_SAMPLES=100000
 VOCAB_SIZE=-1
 
-BIGS_MODEL="bigscience/bloom-1b1"
+BIGS_MODEL="bigscience/bloom-3b"
 ADPT_STRATEGY="continual-pretrain"
 EMBD_SRATEGY="original"
 
-tokenizer_dir="bigscience/bloom-1b1"
+tokenizer_dir="bigscience/bloom-3b"
 cache_dir="/home/zhengxinyong/.cache/huggingface"
 output_dir="/home/zhengxinyong/outputs/$(basename $BIGS_MODEL)_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples_${VOCAB_SIZE}vocab_${EMBD_SRATEGY}"
 logging_dir="/home/zhengxinyong/logs/$(basename $BIGS_MODEL)_${LANG}_${ADPT_STRATEGY}_${DATA_SAMPLES}samples_${VOCAB_SIZE}vocab_${EMBD_SRATEGY}"

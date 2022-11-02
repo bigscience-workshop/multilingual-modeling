@@ -33,23 +33,26 @@ parser.add_argument("--batch_size", type=int, default=8)
 parser.add_argument("--base_model", type=str, default="bigscience/bloom-1b3")
 parser.add_argument("--local_rank", type=int, default=-1)
 parser.add_argument("--reproducible", action="store_true")
-parser.add_argument("--seed_runs", type=int, default=1)
+parser.add_argument("--seed_runs", type=int, default=3)
 parser.add_argument("--num_pairs", type=int, default=200)
+parser.add_argument("--device", type=str)
+parser.add_argument("--use_checkpoints", action="store_true")
 args = parser.parse_args()
 
 language1, language2 = args.lang_pairs.split("-")
-dataset = load_dataset("tatoeba", lang1=language1, lang2=language2, cache_dir=args.cache_dir)
+all_datasets = []
+for i in range(args.seed_runs):
+    start = i * args.num_pairs
+    end = (i + 1) * args.num_pairs
+    # print("loaded dataset indexes:", start, "-", end)
 
-train_dataset = dataset["train"]
-
-len_train_dataset = len(train_dataset)
-
-language1_dataset = [
-    train_dataset['translation'][i][language1] for i in range(len_train_dataset) if i < args.num_pairs
-]
-language2_dataset = [
-    train_dataset['translation'][i][language2] for i in range(len_train_dataset) if i < args.num_pairs
-]
+    train_dataset = load_dataset("tatoeba", lang1=language1, lang2=language2, cache_dir=args.cache_dir, split=f"train[{start}:{end}]")
+    language1_dataset = list()
+    language2_dataset = list()
+    for i in tqdm(range(len(train_dataset)), desc=f"loading dataset (n={args.num_pairs})"):
+        language1_dataset.append(train_dataset['translation'][i][language1])
+        language2_dataset.append(train_dataset['translation'][i][language2])
+    all_datasets.append((language1_dataset, language2_dataset))
 
 tok = args.tokenizer
 model_name = args.model_name
@@ -78,120 +81,119 @@ def print_model_trainable_layers(model):
         # print(param)
     
     print(model)
-
-language = language1 if language1 != "en" else language2 # language for adapters
-scores = list()
-for seed in range(args.seed_runs):
-    set_seed(seed)
     
-    if "_pfeiffer_inv_" in model_name:
-        # TODO: current hack to avoid the naming issue.
-        assert False, "rename '_pfeiffer_inv_' to '_pfeiffer+inv_'"
+if "_pfeiffer_inv_" in model_name:
+    # TODO: current hack to avoid the naming issue.
+    assert False, "rename '_pfeiffer_inv_' to '_pfeiffer+inv_'"
 
-    if "_pfeiffer_" in model_name:
-        def model_init():
-            model = AutoModel.from_pretrained(base_model, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    elif "_pfeiffer+inv_" in model_name:
-        def model_init():
-            model = AutoModel.from_pretrained(base_model, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    elif "_aa_" in model_name:
-        def model_init():
-            model = AutoModelfrom_pretrained(base_model, 
-                                             pad_token_id=tokenizer.pad_token_id,
-                                             cache_dir=args.cache_dir)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_aa_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    elif "_lora_" in model_name:
-        def model_init():
-            model = AutoModel.from_pretrained(base_model, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    elif "_ia3_" in model_name:
-        def model_init():
-            model = AutoModel.from_pretrained(base_model, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
+if "_pfeiffer_" in model_name:
+    def model_init():
+        model = AutoModel.from_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+elif "_pfeiffer+inv_" in model_name:
+    def model_init():
+        model = AutoModel.from_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_pfeiffer+inv_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+elif "_aa_" in model_name:
+    def model_init():
+        model = AutoModelfrom_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_aa_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+elif "_lora_" in model_name:
+    def model_init():
+        model = AutoModel.from_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_lora_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+elif "_ia3_" in model_name:
+    def model_init():
+        model = AutoModel.from_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
 
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_ia3_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
-        def model_init():
-            model = AutoModel.from_pretrained(base_model, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
-            pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
-            model.set_active_adapters(pretrained_adapter_name)
-            print_model_trainable_layers(model)
-            return model
-    else:
-        def model_init():
-            model = AutoModel.from_pretrained(model_name, 
-                                              pad_token_id=tokenizer.pad_token_id,
-                                              cache_dir=args.cache_dir)
-            print_model_trainable_layers(model)
-            return model
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_ia3_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+elif "_prefix_tuning_" in model_name or "_prompt_tuning_" in model_name:
+    def model_init():
+        model = AutoModel.from_pretrained(base_model, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        pretrained_adapter_name = model.load_adapter(f"{model_name}/oscar_prefix_tuning_{language}")
+        model.set_active_adapters(pretrained_adapter_name)
+        # print_model_trainable_layers(model)
+        return model
+else:
+    def model_init():
+        model = AutoModel.from_pretrained(model_name, 
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            cache_dir=args.cache_dir)
+        # print_model_trainable_layers(model)
+        return model
 
-    # model.freeze_model(True)
+def evaluate_on_tatoeba(model):
+    language = language1 if language1 != "en" else language2 # language for adapters
+    scores = list()
 
-    model = model_init()
-    model = model.eval()
+    for i in tqdm(range(args.seed_runs), desc="seeded runs"):
+        language1_dataset, language2_dataset = all_datasets[i]
+        sentence_embs1 = list()
+        sentence_embs2 = list()
+
+        # get all the sentence representations
+        # avoid padding
+        for sent in tqdm(language1_dataset, desc=f"Going through {language1}, compute embeddings"):
+            x = tokenizer(sent, return_tensors="pt").input_ids.to(model.device)
+            output = model(x)
+            hidden_states = output.last_hidden_state.detach()
+            sentence_emb = torch.mean(hidden_states[0], dim=0).tolist()
+            sentence_embs1.append(sentence_emb)
+
+        for sent in tqdm(language2_dataset, desc=f"Going through {language2}, compute embeddings"):
+            x = tokenizer(sent, return_tensors="pt").input_ids.to(model.device)
+            output = model(x)
+            hidden_states = output.last_hidden_state.detach()
+            sentence_emb = torch.mean(hidden_states[0], dim=0).tolist()
+            sentence_embs2.append(sentence_emb)
+
+        # calculate nxn cosine similarity
+        embs1 = torch.Tensor(sentence_embs1)
+        embs2 = torch.Tensor(sentence_embs2)
+        sim = nxn_cos_sim(embs1, embs2)
+
+        # calculate accuracy score
+        labels = torch.argmax(sim, dim=1)
+        gold_labels = torch.arange(len(labels))
+        scores.append(torch.sum(labels == gold_labels) / len(labels))
     
-    sentence_embs1 = list()
-    sentence_embs2 = list()
-
-    # get all the sentence representations
-    # avoid padding
-    for sent in tqdm(language1_dataset, desc=f"Going through {language1}"):
-        x = tokenizer(sent, return_tensors="pt").input_ids.to(model.device)
-        output = model(x)
-        hidden_states = output.last_hidden_state.detach()
-        sentence_emb = torch.mean(hidden_states[0], dim=0).tolist()
-        sentence_embs1.append(sentence_emb)
-
-    for sent in tqdm(language2_dataset, desc=f"Going through {language2}"):
-        x = tokenizer(sent, return_tensors="pt").input_ids.to(model.device)
-        output = model(x)
-        hidden_states = output.last_hidden_state.detach()
-        sentence_emb = torch.mean(hidden_states[0], dim=0).tolist()
-        sentence_embs2.append(sentence_emb)
-
-    # calculate nxn cosine similarity
-    embs1 = torch.Tensor(sentence_embs1)
-    embs2 = torch.Tensor(sentence_embs2)
-    sim = nxn_cos_sim(embs1, embs2)
-
-    # calculate accuracy score
-    labels = torch.argmax(sim, dim=1)
-    gold_labels = torch.arange(len(labels))
-    scores.append(torch.sum(labels == gold_labels) / len(labels))
-
-    
-    if not args.reproducible:
-        del model
-    gc.collect()
-    torch.cuda.empty_cache()
+    return scores
 
 
+model = model_init()
+model = model.to(args.device)
+# print("Model's device:", model.device)
+model = model.eval()
+
+##### RESULTS
+scores = evaluate_on_tatoeba(model)
 print("="*50)
 print(f"Tatoeba Results ({args.num_pairs} pairs of {args.lang_pairs})")
 print("="*50)
@@ -201,18 +203,18 @@ print(f"{np.mean(scores) * 100:.2f} ± {np.std(scores) * 100:.2f}")
 print("="*50)
 
 
-# writing results to the model name.
-with open(f"{model_name}/tatoeba-{language1}-{language2}-results.txt", "w+") as wf:
-    wf.write("="*50)
-    wf.write('\n')
-    wf.write(f"Tatoeba Results ({args.num_pairs} pairs of {args.lang_pairs})")
-    wf.write('\n')
-    wf.write("="*50)
-    wf.write('\n')
-    wf.write(f"Model: {model_name}")
-    wf.write('\n')
-    wf.write(f"{scores}")
-    wf.write('\n')
-    wf.write(f"{np.mean(scores) * 100:.2f} ± {np.std(scores) * 100:.2f}")
-    wf.write('\n')
-    wf.write("="*50)
+    # # writing results to the model name.
+    # with open(f"{model_name}/tatoeba-{language1}-{language2}-results.txt", "w+") as wf:
+    #     wf.write("="*50)
+    #     wf.write('\n')
+    #     wf.write(f"Tatoeba Results ({args.num_pairs} pairs of {args.lang_pairs})")
+    #     wf.write('\n')
+    #     wf.write("="*50)
+    #     wf.write('\n')
+    #     wf.write(f"Model: {model_name}")
+    #     wf.write('\n')
+    #     wf.write(f"{scores}")
+    #     wf.write('\n')
+    #     wf.write(f"{np.mean(scores) * 100:.2f} ± {np.std(scores) * 100:.2f}")
+    #     wf.write('\n')
+    #     wf.write("="*50)

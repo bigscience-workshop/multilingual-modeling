@@ -1,6 +1,6 @@
-# CKPT=25000
-# M="/home/zhengxinyong/outputs/bloom-7b1_ru_continual-pretrain_100000samples_-1vocab_original/checkpoint-${CKPT}"
-M="bigscience/bloom-7b1"
+CKPT=25000
+# M="/home/zhengxinyong/outputs/bloom-3b_ru_continual-pretrain_100000samples_-1vocab_original/"
+M="bigscience/bloom-3b"
 
 python3 /home/zhengxinyong/lm-evaluation-harness/main.py \
 --model bigscience \

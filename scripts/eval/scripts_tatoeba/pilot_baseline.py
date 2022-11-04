@@ -82,6 +82,7 @@ def print_model_trainable_layers(model):
     
     print(model)
     
+language = language1 if language1 != "en" else language2 # language for adapters
 if "_pfeiffer_inv_" in model_name:
     # TODO: current hack to avoid the naming issue.
     assert False, "rename '_pfeiffer_inv_' to '_pfeiffer+inv_'"
@@ -150,7 +151,6 @@ else:
         return model
 
 def evaluate_on_tatoeba(model):
-    language = language1 if language1 != "en" else language2 # language for adapters
     scores = list()
 
     for i in tqdm(range(args.seed_runs), desc="seeded runs"):

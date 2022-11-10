@@ -34,7 +34,7 @@ from transformers import (
     set_seed,
 )
 from transformers.adapters.configuration import AdapterConfig
-from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config, CompacterPlusPlusConfig
+from transformers.adapters import PrefixTuningConfig, LoRAConfig, IA3Config, CompacterPlusPlusConfig, PfeifferInvConfig, ConfigUnion
 
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -305,12 +305,16 @@ class ModelArguments:
         default="main",
         metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
     )
-    use_auth_token: bool = field(
-        default=False,
+    use_auth_token: str = field(
+        default="",
         metadata={
             "help": "Will use the token generated when running `transformers-cli login` (necessary to use this script "
             "with private models)."
         },
+    )
+    tie_word_embeddings: int = field(
+        default=1,
+        metadata={"help": "1: tie. 0: decoupled embedding"},
     )
     lang_adapt_strategies: str = field(
         default=None,
@@ -620,7 +624,7 @@ def load_tokenizer(model_args):
         "cache_dir": model_args.cache_dir,
         "use_fast": model_args.use_fast_tokenizer,
         "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
+        "use_auth_token": model_args.use_auth_token,
     }
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
@@ -704,7 +708,8 @@ def load_model(model_args, tokenizer):
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
         "revision": model_args.model_revision,
-        "use_auth_token": True if model_args.use_auth_token else None,
+        "use_auth_token": model_args.use_auth_token,
+        "tie_word_embeddings": bool(model_args.tie_word_embeddings),
     }
     if model_args.config_name:
         config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
@@ -723,7 +728,7 @@ def load_model(model_args, tokenizer):
             config=config,
             cache_dir=model_args.cache_dir,
             revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
+            use_auth_token=model_args.use_auth_token,
         )
         print(f"✅ load model from: {model_args.model_name_or_path}")
     else:
@@ -914,6 +919,46 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
                 attn_matrices = adapter_args.attn_matrices_ia3,
             )
         
+        elif adapter_args.adapter_config == "ia3+inv":
+            ia3_adapter_config = IA3Config(
+                selfattn_lora = adapter_args.selfattn_lora,
+                intermediate_lora = adapter_args.intermediate_lora,
+                output_lora = adapter_args.output_lora, 
+                r = adapter_args.r_ia3,
+                alpha = adapter_args.alpha_ia3,
+                dropout = adapter_args.dropout_ia3,
+                init_weights = adapter_args.init_weights_ia3,
+                composition_mode = adapter_args.composition_mode_ia3,
+                attn_matrices = adapter_args.attn_matrices_ia3,
+            )
+            inv_adapter_config = PfeifferInvConfig(
+                mh_adapter=False,
+                output_adapter=False,
+                original_ln_before=False,
+                original_ln_after=False,
+                ln_before=False,
+                ln_after=False,
+                inv_adapter="nice",
+                inv_adapter_reduction_factor=2,
+            )
+            adapter_config = ConfigUnion(
+                ia3_adapter_config,
+                inv_adapter_config
+            )
+
+
+        elif adapter_args.adapter_config == "inv":
+            adapter_config = PfeifferInvConfig(
+                mh_adapter=False,
+                output_adapter=False,
+                original_ln_before=False,
+                original_ln_after=False,
+                ln_before=False,
+                ln_after=False,
+                inv_adapter="nice",
+                inv_adapter_reduction_factor=2,
+            )
+        
         #### commenting out because we are not using adaptable adapters
         # elif adapter_args.adapter_config == "aa":
         #     adapter_config = AAConfig(
@@ -1079,14 +1124,29 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             if model_args.embedding_strategies == "original-frozen":
                 param.requires_grad = False
             else:
-                param.requires_grad = True
+                # model_args.embedding_strategies == "original"
+                if model_args.lang_adapt_strategies == "sft" and ("lm_head" in name or "layernorm" in name):
+                    # only freeze lm_head (since input and output embeddings are decoupled.)
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
             emb_params += param.numel()
         
         elif model_args.lang_adapt_strategies is not None:
             if model_args.lang_adapt_strategies == "emb":
                 param.requires_grad = False
             elif model_args.lang_adapt_strategies == "bitfit":
-                if 'bias' not in name:
+                if 'bias' in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            elif model_args.lang_adapt_strategies == "bitfit+inv":
+                if 'bias' in name or "inv" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            elif model_args.lang_adapt_strategies == "sft":
+                if "layernorm" in name or "ln_f" in name:
                     param.requires_grad = False
                 else:
                     param.requires_grad = True
@@ -1100,9 +1160,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
             print(f"🚀 Trainable layer '{name}'")
             trainable_params += param.numel()
 
+    print(f"Total trainable parameters: {trainable_params}")
     print(f"Total frozen parameters: {frozen_params}")
     print(f"Total emb parameters (wte, wpe): {emb_params}")
-    print(f"Total trainable parameters: {trainable_params}")
     print(f"❗️ Note: These figures are incorrect for masking-based methods such as sft and fish.")
 
 def sft_get_maskable_params(model):
@@ -1110,9 +1170,11 @@ def sft_get_maskable_params(model):
     # TODO: asserting to make sure no unintended maskable layers for embedding layers   
     sft_maskable_params = [
         n for n, p in model.named_parameters()
-        if n.startswith(model.base_model_prefix) and p.requires_grad
+        if "layernorm" not in n and p.requires_grad
     ]
 
+    print("Maskable Params:")
+    print(sft_maskable_params)
 
     return sft_maskable_params
 
@@ -1138,9 +1200,10 @@ def main():
     # conditional checks
     assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", 
                                                 "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
-                                                "compacterpp", "compacter", "lora", "ia3", "aa",
+                                                "compacterpp", "compacter", "lora", "aa",
+                                                "ia3", "ia3+inv",
                                                 "prefix_tuning", "prefix_tuning_flat", "prompt_tuning",
-                                                "sft", "bitfit", "fish")
+                                                "sft", "bitfit", "bitfit+inv", "fish")
     assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
     if adapter_args.train_adapter:
         assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "continual-pretrain-reinit", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
@@ -1157,12 +1220,14 @@ def main():
         "compacter": AdapterTrainer,
         "lora": AdapterTrainer,
         "ia3": AdapterTrainer,
+        "ia3+inv": AdapterTrainer,
         "aa": AdapterTrainer,
         "prefix_tuning": AdapterTrainer,
         "prefix_tuning_flat": AdapterTrainer,
         "prompt_tuning": AdapterTrainer,
         "sft": LotteryTicketSparseFineTuner,
         "bitfit": Trainer,
+        "bitfit+inv": Trainer,
         "fish": SparseUpdateTrainer,
     }
 

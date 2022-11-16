@@ -7,10 +7,10 @@ import pathlib
 parser = argparse.ArgumentParser()
 # parser.add_argument("--local_dir", type=str, required=True)
 # parser.add_argument("--remote_dir", type=str, required=True)
-parser.add_argument("--parent_folder", type=str, required=True, 
-                    help="the parent directory that contains all the model repos. "
-                         "we will iterate through the model repo (`local_dir`) "
-                         "and create the `remote_dir` on HF hub.")
+# parser.add_argument("--parent_folder", type=str, required=True, 
+#                     help="the parent directory that contains all the model repos. "
+#                          "we will iterate through the model repo (`local_dir`) "
+#                          "and create the `remote_dir` on HF hub.")
 parser.add_argument("--commit_message", type=str, default="Push to HF hub")
 args = parser.parse_args()
 
@@ -118,28 +118,29 @@ def rm_one(local_dir, remote_dir, rm_file, commit_message="rm --cached"):
 
 
 #### main ####
-for folder in pathlib.Path(args.parent_folder).glob("*"):
-    # skip empty directory:
-    if any(folder.iterdir()) is False:
-        continue
+# for folder in pathlib.Path(args.parent_folder).glob("*"):
+#     # skip empty directory:
+#     if any(folder.iterdir()) is False:
+#         continue
 
-    local_dir = str(folder)
-    remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv"
+folder = "/users/zyong2/data/zyong2/bigscience/data/processed/024/bloom-560m_de_continual-pretrain_100000samples_-1vocab_original_bsz32"
+local_dir = str(folder)
+remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv"
 
-    if "continual" in local_dir or "bitfit" in local_dir:
-        rm_file = "*"
-        rm_one(local_dir, remote_dir, rm_file)
-        upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="full-model")
-    elif "pfeiffer" in local_dir or "lora" in local_dir or "ia3" in local_dir:
-        rm_file = "*"
-        rm_one(local_dir, remote_dir, rm_file)
-        upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="adapter")
-    elif "fish" in local_dir or "sft" in local_dir:
-        rm_file = "*"
-        rm_one(local_dir, remote_dir, rm_file)
-        upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="mask")
-    else:
-        print("❌ skip", local_dir)
+if "continual" in local_dir or "bitfit" in local_dir:
+    rm_file = "*"
+    rm_one(local_dir, remote_dir, rm_file)
+    upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="full-model")
+elif "pfeiffer" in local_dir or "lora" in local_dir or "ia3" in local_dir:
+    rm_file = "*"
+    rm_one(local_dir, remote_dir, rm_file)
+    upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="adapter")
+elif "fish" in local_dir or "sft" in local_dir:
+    rm_file = "*"
+    rm_one(local_dir, remote_dir, rm_file)
+    upload_to_hub(local_dir, remote_dir, commit_message=args.commit_message, model_type="mask")
+else:
+    print("❌ skip", local_dir)
 
 
 

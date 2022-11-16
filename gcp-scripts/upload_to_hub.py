@@ -43,7 +43,7 @@ def upload_to_hub(local_dir, remote_dir, commit_message, model_type):
                 add_to_gitignore(local_dir, f, strf)
 
     elif model_type == "adapter":
-        files_to_keep = [".git", ".gitignore", ".gitattributes"]
+        files_to_keep = [".git", ".gitignore", ".gitattributes", ]
         for f in pathlib.Path(local_dir).glob("*"):
             # get relative path
             strf = str(f.relative_to(pathlib.Path(local_dir)))
@@ -140,9 +140,9 @@ def rm_one(local_dir, remote_dir, rm_file, commit_message="rm --cached"):
 #     if any(folder.iterdir()) is False:
 #         continue
 
-folder = "/home/zhengxinyong/outputs/bloom-7b1_th_continual-pretrain_100000samples_-1vocab_original"
+folder = "/users/zyong2/data/zyong2/bigscience/data/processed/030/bloom-560m_de_ia3+inv_100000samples_-1vocab_original-frozen"
 local_dir = str(folder)
-remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv"
+remote_dir = f"bs-la/{pathlib.Path(folder).name}".replace("+", "_")  # affects "pfeiffer+inv" and "ia3+inv"
 
 if "continual" in local_dir or "bitfit" in local_dir:
     # rm_file = "*"

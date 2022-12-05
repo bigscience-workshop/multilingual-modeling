@@ -22,3 +22,7 @@ See the scripts in `lang_adapt/scripts/run_clm_*` as examples for the following 
 ## WikiANN
 
 See the scripts in `scripts/eval/scripts_wikiann/pilot_*_.sh` as examples for evaluating the adapted models on WikiANN.
+
+## Plots
+
+- BLOOMZ-7b1-xP3RU: [Colab](https://colab.research.google.com/drive/1GYjuR2hH3rYNh4vMeheV12Q-5JUP7RxA?usp=sharing)

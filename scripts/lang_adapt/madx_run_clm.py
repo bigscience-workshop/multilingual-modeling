@@ -326,7 +326,7 @@ class ModelArguments:
     )
     adapter_placement: str = field(
         default="all", 
-        metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ','"},
+        metadata={"help": "list of layers where to place the adapters: all: use all layers, '17,24': list layers id separated by ',', '0' refers to embedding layer"},
     )
     
     def __post_init__(self):
@@ -346,6 +346,9 @@ class DataTrainingArguments:
     )
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
+    )
+    data_column_names: Optional[str] = field(
+        default="text", metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
@@ -424,7 +427,7 @@ class ParamEfficientArguments(MultiLingAdapterArguments):
     )
     output_lora: bool = field(
         default=False,
-        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to False."},
+        metadata={"help": "If True, add LoRA to the output MLP weights of a model. Defaults to True."},
     )
     r_lora: Optional[int] = field(
         default=8,
@@ -656,7 +659,6 @@ def load_data(data_args, model_args):
         raw_datasets = load_dataset(
             data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
         )
-
     else:
         data_files = {}
         dataset_args = {}
@@ -693,9 +695,9 @@ def load_data(data_args, model_args):
     if data_args.max_train_samples is not None and len(raw_datasets['train']) > data_args.max_train_samples:
         # FIXME: currently assume the loaded checkpoint is trained with the first data_args.max_train_samples number of samples
         #raw_datasets["train"] = raw_datasets["train"].filter(lambda example, indice: indice < data_args.max_train_samples, with_indices=True)
-        print(raw_datasets["train"])
+        print("Before applying max_train_samples:", raw_datasets["train"])
         raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
-        print(raw_datasets["train"])
+        print("After applying max_train_samples:", raw_datasets["train"])
 
     if data_args.max_eval_samples is not None and len(raw_datasets['validation']) > data_args.max_eval_samples:
         raw_datasets["validation"] = raw_datasets["validation"].select(range(data_args.max_eval_samples))
@@ -745,18 +747,23 @@ def load_model(model_args, tokenizer):
 def preprocess_data(training_args, data_args, model_args, tokenizer):
     with training_args.main_process_first(desc="dataset map tokenization"):
         # cache tokenized data
-        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+        if data_args.dataset_name is not None:
+            base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+            saved_tokenized_datasets_fp = pathlib.Path(f"{base_cache_dir}/tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+        else:
+            base_cache_dir = pathlib.Path(f"{data_args.train_file}")
+            saved_tokenized_datasets_fp = base_cache_dir.parent / f"tokenized_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt"
 
         if not data_args.overwrite_cache and saved_tokenized_datasets_fp.exists() and saved_tokenized_datasets_fp.is_file():
             tokenized_datasets = torch.load(str(saved_tokenized_datasets_fp))
             logger.info(f"✅ loaded tokenized_data from {saved_tokenized_datasets_fp}")
         else:
             raw_datasets = load_data(data_args, model_args)
-            assert len(raw_datasets['train']) == data_args.max_train_samples
+            if data_args.max_train_samples:
+                assert len(raw_datasets['train']) == data_args.max_train_samples
             assert len(raw_datasets['validation']) == data_args.max_eval_samples
             assert len(raw_datasets['test']) == data_args.max_eval_samples
-            print(f"✅ Sanity check: loaded raw datasets have {data_args.max_train_samples} training samples and {data_args.max_eval_samples} eval samples")
+            print(f"✅ Sanity check: loaded raw datasets have {len(raw_datasets['train'])} training samples and {data_args.max_eval_samples} eval samples")
                                                       
             # First we tokenize all the texts.
             if training_args.do_train:
@@ -764,7 +771,7 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
             else:
                 column_names = raw_datasets["validation"].column_names
 
-            text_column_name = "text" if "text" in column_names else column_names[0]
+            text_column_name = data_args.data_column_names if data_args.data_column_names in column_names else column_names[0]
             # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
             tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
 
@@ -839,8 +846,12 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
     with training_args.main_process_first(desc="grouping texts together"):
-        base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
-        saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+        if data_args.dataset_name is not None:
+            base_cache_dir = f"{model_args.cache_dir}/{data_args.dataset_name}/{data_args.dataset_config_name}"
+            saved_lm_datasets_fp = pathlib.Path(f"{base_cache_dir}/lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt")
+        else:
+            base_cache_dir = pathlib.Path(f"{data_args.train_file}")
+            saved_lm_datasets_fp = base_cache_dir.parent / f"lm_data_{data_args.max_train_samples}train_{data_args.max_eval_samples}eval_{len(tokenizer)}vocab.pt"        
 
         if not data_args.overwrite_cache and saved_lm_datasets_fp.exists() and saved_lm_datasets_fp.is_file():
             lm_datasets = torch.load(str(saved_lm_datasets_fp))
@@ -908,9 +919,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         
         elif adapter_args.adapter_config == "ia3":
             adapter_config = IA3Config(
-                selfattn_lora = adapter_args.selfattn_lora,
+                selfattn_lora = True,
                 intermediate_lora = adapter_args.intermediate_lora,
-                output_lora = adapter_args.output_lora, 
+                output_lora = True, 
                 r = adapter_args.r_ia3,
                 alpha = adapter_args.alpha_ia3,
                 dropout = adapter_args.dropout_ia3,
@@ -921,9 +932,9 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         
         elif adapter_args.adapter_config == "ia3+inv":
             ia3_adapter_config = IA3Config(
-                selfattn_lora = adapter_args.selfattn_lora,
+                selfattn_lora = True,
                 intermediate_lora = adapter_args.intermediate_lora,
-                output_lora = adapter_args.output_lora, 
+                output_lora = True, 
                 r = adapter_args.r_ia3,
                 alpha = adapter_args.alpha_ia3,
                 dropout = adapter_args.dropout_ia3,

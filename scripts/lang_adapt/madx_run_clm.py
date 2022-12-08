@@ -320,6 +320,12 @@ class ModelArguments:
         default=None,
         metadata={"help": "language adaptation strategies"},
     )
+
+    reinit: int = field(
+        default=0,
+        metadata={"help": "reinitialize the model"},
+    )
+
     embedding_strategies: str = field(
         default="",
         metadata={"help": "choose one of the two strategies - 'replace', 'extend', 'overlap-replace'"},
@@ -920,8 +926,8 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         elif adapter_args.adapter_config == "ia3":
             adapter_config = IA3Config(
                 selfattn_lora = True,
-                intermediate_lora = adapter_args.intermediate_lora,
-                output_lora = True, 
+                intermediate_lora = True,
+                output_lora = False, 
                 r = adapter_args.r_ia3,
                 alpha = adapter_args.alpha_ia3,
                 dropout = adapter_args.dropout_ia3,
@@ -933,8 +939,8 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
         elif adapter_args.adapter_config == "ia3+inv":
             ia3_adapter_config = IA3Config(
                 selfattn_lora = True,
-                intermediate_lora = adapter_args.intermediate_lora,
-                output_lora = True, 
+                intermediate_lora = True,
+                output_lora = False, 
                 r = adapter_args.r_ia3,
                 alpha = adapter_args.alpha_ia3,
                 dropout = adapter_args.dropout_ia3,
@@ -1123,7 +1129,7 @@ def modify_model(adapter_args, data_args, model_args, tokenizer, model):
     elif model_args.embedding_strategies == "original":
         pass # do nothing.
 
-    if "reinit" in model_args.lang_adapt_strategies:
+    if model_args.reinit:
         print(f"❗️ Reinitialize model's weights")
         model.init_weights()
 
@@ -1209,7 +1215,7 @@ def main():
     training_args.data_dir = f'{training_args.output_dir}'
 
     # conditional checks
-    assert model_args.lang_adapt_strategies in ("continual-pretrain", "continual-pretrain-reinit", 
+    assert model_args.lang_adapt_strategies in ("continual-pretrain",
                                                 "emb", "emb-then-adpt", "pfeiffer", "pfeiffer+inv", 
                                                 "compacterpp", "compacter", "lora", "aa",
                                                 "ia3", "ia3+inv",
@@ -1217,12 +1223,11 @@ def main():
                                                 "sft", "bitfit", "bitfit+inv", "fish")
     assert model_args.embedding_strategies in ("replace", "extend", "overlap-replace", "overlap-replace-breakdown", "original", "original-frozen")
     if adapter_args.train_adapter:
-        assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "continual-pretrain-reinit", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
+        assert model_args.lang_adapt_strategies not in ("emb", "continual-pretrain", "bitfit"), f"remove --train_adapter for { model_args.lang_adapt_strategies} strategy."
 
     # setup trainer class
     trainer_class_mapping = {
         "continual-pretrain": Trainer,
-        "continual-pretrain-reinit": Trainer,
         "emb": Trainer, 
         "emb-then-adpt": AdapterTrainer, 
         "pfeiffer": AdapterTrainer,

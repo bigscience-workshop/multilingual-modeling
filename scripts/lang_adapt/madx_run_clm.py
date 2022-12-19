@@ -817,7 +817,7 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
             from tqdm import tqdm
             count_total_tokens = 0
             for i in tqdm(range(len(tokenized_datasets['train'])), desc="counting training tokens"):
-                count_total_tokens += len(tokenized_datasets['train'][0]['input_ids'])
+                count_total_tokens += len(tokenized_datasets['train'][i]['input_ids'])
             print("Total training tokens:", count_total_tokens)
             assert False
         return tokenized_datasets

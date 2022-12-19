@@ -404,6 +404,11 @@ class DataTrainingArguments:
         default=True, metadata={"help": "Whether to keep line breaks when using TXT files or not."}
     )
 
+    count_training_tokens: bool = field(
+        default=False, metadata={"help": "Count the number of tokens in the training samples"}
+    )
+
+
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
             raise ValueError("Need either a dataset name or a training/validation file.")
@@ -808,6 +813,13 @@ def preprocess_data(training_args, data_args, model_args, tokenizer):
         if "validation" not in tokenized_datasets and training_args.do_eval:
             raise ValueError("--do_eval requires a validation dataset")
 
+        if data_args.count_training_tokens:
+            from tqdm import tqdm
+            count_total_tokens = 0
+            for i in tqdm(range(len(tokenized_datasets['train'])), desc="counting training tokens"):
+                count_total_tokens += len(tokenized_datasets['train'][0]['input_ids'])
+            print("Total training tokens:", count_total_tokens)
+            assert False
         return tokenized_datasets
 
 
@@ -873,6 +885,9 @@ def get_lm_dataset(training_args, data_args, model_args, tokenizer):
             )
             torch.save(lm_datasets, saved_lm_datasets_fp)
             logger.info(f"✅ saved lm_data to {saved_lm_datasets_fp}")
+        
+        if data_args.count_training_tokens:
+            tokenized_datasets = preprocess_data(training_args, data_args, model_args, tokenizer)
     return lm_datasets
 
 def modify_model(adapter_args, data_args, model_args, tokenizer, model):
@@ -1211,7 +1226,7 @@ def main():
         )
     else:
         model_args, data_args, training_args, adapter_args = parser.parse_args_into_dataclasses()
-    
+
     training_args.data_dir = f'{training_args.output_dir}'
 
     # conditional checks

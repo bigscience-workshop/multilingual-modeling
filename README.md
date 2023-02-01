@@ -1,10 +1,11 @@
 # README
 
 ## Installation
-1. Install the packages from [composable-sft](https://github.com/cambridgeltl/composable-sft).
-2. Install the packages from [rational_activations](https://github.com/ml-research/rational_activations). You would need to follow the [Other CUDA/PyTorch] section for installation. 
-3. Uninstall transformers using the command `pip uninstall transformers`. 
-4. Install the packages from this repo using `pip install -r requirements.txt`. 
+1. Install [torch](https://pytorch.org/get-started/locally/).
+2. Install the packages from [composable-sft](https://github.com/cambridgeltl/composable-sft).
+3. Install the packages from [rational_activations](https://github.com/ml-research/rational_activations). You would need to follow the [Other CUDA/PyTorch] section for installation. 
+4. Uninstall transformers using the command `pip uninstall transformers`. 
+5. Install the packages from this repo using `pip install -r requirements.txt`. 
 
 ## Language Adaptations
 

@@ -1,5 +1,13 @@
 # README
 
+
+### Notes
+This repository is no longer actively maintained. This repo was created when BLOOM+1 paper was written, where we had to engineered the adapter modules due to the new BLOOM architecture.
+
+But now, adapters for BLOOM models are readily available (see [peft](https://github.com/huggingface/peft)), and language adaptation of these models (i.e., training of LLMs on monolingual corpora of a particular language) can be done by following official documentations such as [peft-blog](https://huggingface.co/blog/peft) using the same pretraining objective, next-token-prediction. 
+
+---
+
 This repository contains code for performing language adaptation of multilingual pretrained large language model BLOOM-{560m,1b1,1b7,3b,7b1} to new unseen languages. Please refer to our ACL 2023 paper [BLOOM+1: Adding Language Support to BLOOM for Zero-Shot Prompting](https://aclanthology.org/2023.acl-long.653/).
 
 Our implementations support the following features:
